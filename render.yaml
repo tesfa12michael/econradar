@@ -1,0 +1,45 @@
+# Render Blueprint for the EconRadar backend (FastAPI + APScheduler).
+# Docs: https://render.com/docs/blueprint-spec
+# The free web service sleeps after ~15 min idle; UptimeRobot pings keep it warm
+# (see DEPLOYMENT.md). Secrets are marked `sync: false` — set them in the Render
+# dashboard, never in this file.
+
+services:
+  - type: web
+    name: econradar-backend
+    runtime: python
+    plan: free
+    region: oregon
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      # Comma-separated allowed CORS origins — set to your Vercel URL.
+      - key: CORS_ORIGINS
+        sync: false
+      # ── Supabase / database (required) ──
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # ── Admin (required) ──
+      - key: ADMIN_HEALTH_TOKEN_HASH
+        sync: false
+      # ── Added in later phases (data-source + LLM/VLM keys) ──
+      # - key: FRED_API_KEY            (Phase 2)
+      # - key: MISTRAL_API_KEY         (Phase 3)
+      # - key: GROQ_API_KEY            (Phase 3)
+      # - key: OPENROUTER_API_KEY      (Phase 3)
+      # - key: GOOGLE_AI_STUDIO_API_KEY (Phase 3)
