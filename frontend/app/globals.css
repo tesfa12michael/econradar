@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* EconRadar design tokens (docs/designsystem.md). Dark-first; light is Phase 4. */
+:root {
+  --bg-app: #0a0f1e;
+  --bg-card: #111827;
+  --bg-elevated: #1a2235;
+  --border: #1f2d45;
+  --text-primary: #f0f4ff;
+  --text-secondary: #8b9ec7;
+  --text-tertiary: #4a5a7a;
+  --accent: #00d4ff;
+  --positive: #34d399;
+  --negative: #f87171;
+  --warn: #f59e0b;
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+}
+
+html,
+body {
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
