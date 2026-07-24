@@ -10,7 +10,7 @@ Status legend: `[ ]` Not Started · `[~]` In Progress · `[x]` Complete
 ## Phase 1 — Foundation
 
 ### Foundation Infrastructure & First Connector
-**Status:** [~] In Progress — backend code complete & locally verified (ruff clean; 18 unit tests + 1 live World Bank fetch green); frontend scaffolded (build/lint/test verification in progress). Live deploy (Vercel→Render→Supabase) and the scheduler-restart proof are pending cloud provisioning — see `DEPLOYMENT.md`.
+**Status:** [~] In Progress — all code complete & locally verified: backend (ruff clean; 18 unit tests + 1 live World Bank fetch) and frontend (lint clean; `next build` succeeds; 2/2 Vitest) both green. Live deploy (Vercel→Render→Supabase) and the scheduler-restart proof are pending cloud provisioning — see `DEPLOYMENT.md`.
 **Description:** Repo scaffold, full Supabase schema migration (all tables from `architecture.md`), deployed FastAPI/Next.js skeleton, `BaseDataSourceConnector` abstract class with a working World Bank connector as proof of concept, APScheduler wired to a persisted `SQLAlchemyJobStore`, GitHub Actions CI, UptimeRobot keep-alive.
 **Acceptance Criteria:** A public Vercel frontend calls a public Render backend, which reads real World Bank data out of Supabase through one working API endpoint; the scheduled job survives a manual backend restart; CI is green on `main`.
 **Known Edge Cases:** `pg_partman` extension availability must be verified at Supabase project creation, not assumed; Render/Vercel first-deploy configuration quirks (env var propagation, build command detection).
