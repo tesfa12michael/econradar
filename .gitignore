@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────
+# EconRadar — root .gitignore
+# ─────────────────────────────────────────────────────────────
+
+# Secrets / environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Python (backend) ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.log
+
+# ── Node / Next.js (frontend) ──
+node_modules/
+.next/
+out/
+build/
+dist/
+.turbo/
+*.tsbuildinfo
+.vercel/
+coverage/
+
+# ── OS / editor ──
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ── Local scratch ──
+/tmp/
+scratch/
+
+# ── Claude Code local tooling (generic skill libraries, not project source) ──
+.claude/
