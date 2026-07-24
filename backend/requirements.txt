@@ -1,0 +1,20 @@
+# EconRadar backend — runtime dependencies (Phase 1)
+# Python 3.12 target (3.13 works locally). Heavy AI/ML deps (Chronos-2,
+# transformers, statsforecast, etc.) are deliberately NOT here yet — they
+# arrive in Phase 3 so the free-tier build stays small and fast.
+
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.35
+pydantic>=2.7,<3
+pydantic-settings>=2.3,<3
+
+# Database — psycopg3 is the single Postgres driver: SQLAlchemy async engine
+# (postgresql+psycopg) for the API AND APScheduler's sync SQLAlchemyJobStore.
+SQLAlchemy>=2.0.30,<2.1
+psycopg[binary]>=3.2,<3.3
+
+# HTTP client for data-source connectors.
+httpx>=0.27,<0.29
+
+# Scheduler — 3.x per architecture.md (AsyncIOScheduler + SQLAlchemyJobStore).
+APScheduler>=3.10,<4.0

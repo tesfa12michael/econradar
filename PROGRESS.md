@@ -1,7 +1,8 @@
 <!-- filename: PROGRESS.md -->
 # Progress
 
-> Read this file before doing anything else. Your goal for this session is defined in "Next Session Goal." Do not proceed until you have read `CLAUDE.md` and all `agent_docs/` files referenced for your current phase.
+> Read this file before doing anything else. Read `CLAUDE.md` and the `docs/` files
+> for the current phase before touching code.
 
 ## Current Phase
 
@@ -9,88 +10,112 @@ Phase 1: Foundation
 
 ## Phase Status
 
-Not Started
+In Progress — **mid-session review checkpoint** (code written, not yet verified end-to-end).
 
 ## Last Session Summary
 
 **Date:** 2026-07-24
-**Session type:** Blueprint / pre-build (no code written)
+**Session type:** Phase 1 build — first coding session.
 
-This project has not yet entered a build phase. Everything below was decided during the blueprint-creation process (intake → research → feature scoring → architecture → design system → phased build plan → artifact generation), before any repository or code existed.
+Paused at the user's request for a review before local verification and the frontend.
 
-- Defined the project: an open-source AI economic intelligence dashboard (World Bank/IMF/FRED/BIS/WB DataBank data, Chronos-2 forecasting, multi-provider LLM narration, VLM chart interpretation, RAG Q&A).
-- Completed intake, competitive research, and a fully-scored 21-feature tiered list (see `agent_docs/strategy.md`).
-- Confirmed the full tech stack, system architecture, data flow, technical decisions log, and database schema (see `agent_docs/architecture.md`).
-- Confirmed the design system: map-dominant layout, shadcn/ui + Tailwind v4, dark palette with a single cyan-teal accent, Inter/JetBrains Mono typography, three key user flows, WCAG 2.1 AA baseline (see `agent_docs/design-system.md`).
-- Sequenced the confirmed decisions into five build phases with checkpoints (see the phase breakdown in `agent_docs/features.md`).
-- Completed sequential artifact generation (Section 7): all 8 artifacts now exist — `strategy.md`, `architecture.md`, `features.md`, `design-system.md`, `CLAUDE.md`, this file, `PHASE_1_PROMPT.md`, and `DEMO_SCRIPT.md`.
-- `CLAUDE.md` received a follow-up edit after initial generation (still under 200 lines) — see Key Decisions Made below.
+**Built (written + byte-compiles cleanly; NOT yet run against installed deps or a live DB):**
+- Repo initialized (`git init`, `main` branch). Root files: `.gitignore`, `.gitattributes`,
+  MIT `LICENSE`, `README.md`, `.env.example` (mirrors `docs/architecture.md` env vars).
+- **Database (`supabase/`)** — full schema migration for all 10 tables; `time_series` as a
+  RANGE-partitioned parent; two partitioning paths (`0003a` pg_partman primary, `0003b` manual
+  fallback); reference seed (5 sources, 8 WB indicators); `country_profiles` seed of **217 real
+  economies generated from the live World Bank registry** (`backend/scripts/generate_country_seed.py`).
+- **Backend (`backend/`)** — FastAPI app (`main.py`) with lifespan-managed scheduler + CORS;
+  `config.py` (all-optional settings), `db.py` (lazy psycopg3 async engine, health probe),
+  `models.py` (ORM), `schemas.py` (incl. shared `TimeSeriesRecord`), `repositories.py`.
+  Routers: `/health`, `/status`, `/api/v1/countries`, `/api/v1/sources`, `/api/v1/indicators/{cc}`.
+- **Connectors** — `BaseDataSourceConnector` (fetch→normalize→validate→persist template with
+  `pipeline_runs` + `etl_errors` logging, self-seeding source/indicator upserts, partition-safe
+  time_series upsert) and the concrete **World Bank** connector (paginated, retry/backoff, handles
+  null-value + aggregate-row edge cases). WB API response shapes verified live against the real API.
+- **Services** — `ForecastingService` / `LLMService` / `VLMService` stubs that fix the authoritative
+  fallback order (Phase 3 implements them).
+- **Scheduler** — `AsyncIOScheduler` + `SQLAlchemyJobStore` (Supabase); one WB job using an
+  add-if-absent pattern that demonstrates restart-persistence.
+
+**NOT done yet (remaining in this session):** local verification (`pip install`, `ruff`, `pytest`,
+live connector run), backend tests, the Next.js frontend, GitHub Actions CI, Render/Vercel/UptimeRobot
+configs, `docs/features.md` status updates, and the `DEPLOYMENT.md` handoff checklist.
 
 ## Files Created or Modified
 
-| File | What Changed |
-|---|---|
-| `agent_docs/strategy.md` | Created |
-| `agent_docs/architecture.md` | Created |
-| `agent_docs/features.md` | Created |
-| `agent_docs/design-system.md` | Created |
-| `CLAUDE.md` | Created; later updated with verification command, commit-discipline rules, fallback-cascade rule, Code Style section |
-| `PROGRESS.md` | Created (this file); later updated to reflect Section 7 completion |
-| `PHASE_1_PROMPT.md` | Created |
-| `DEMO_SCRIPT.md` | Created — Part 1 intentionally scaffolded, not fully written |
+Root: `.gitignore`, `.gitattributes`, `LICENSE`, `README.md`, `.env.example`, `PROGRESS.md`.
+`supabase/`: `README.md`, `migrations/0001…0003b`, `seeds/0004_seed_reference.sql`,
+`seeds/0005_seed_country_profiles.sql`.
+`backend/`: `requirements.txt`, `requirements-dev.txt`, `pyproject.toml`, `config.py`, `db.py`,
+`logging_config.py`, `models.py`, `schemas.py`, `repositories.py`, `main.py`,
+`connectors/{__init__,base,world_bank}.py`, `services/{__init__,forecasting,llm,vlm}.py`,
+`scheduler/{__init__,scheduler,jobs}.py`, `routers/{__init__,health,data}.py`,
+`scripts/generate_country_seed.py`.
 
-## Key Decisions Made
+## New Dependencies (flagged per CLAUDE.md hard rule)
 
-Amendments made mid-session, beyond a straight-line run of the original blueprint template — logged here so they aren't mistaken for oversights later:
+- **Backend runtime:** fastapi, uvicorn[standard], pydantic, pydantic-settings, SQLAlchemy,
+  psycopg[binary], httpx, APScheduler.
+- **Backend dev/test:** pytest, pytest-asyncio, ruff.
+- **Frontend:** none added yet (Next.js scaffold is still pending).
 
-- Added a `country_profiles` table to the schema (static country reference data) to avoid joining large time-series tables just for a country name, and to give the RAG pipeline structured "world knowledge."
-- Replaced a fully-public `/admin/health` with a hybrid approach: a curated public `/status` page (sanitized signals only) plus a private, token-gated `/admin/health` (full internals) — the token is shared directly with reviewers, never committed or linked publicly.
-- Added a Phase 4 deliverable outside this repo's 8 canonical artifacts: a standalone `CASE_STUDY.md` for the portfolio website, built entirely in Phase 4 from real metrics/screenshots/challenges, sourced from `agent_docs/`, this file's decision history, and the original research conversation.
-- Deferred `DEMO_SCRIPT.md` Part 1 (The Demo Walkthrough) to Phase 4: Parts 2 and 3 are complete now since they're built from already-locked decisions, but a script for the finished product can't honestly be written before Phase 1 has even started. Build Part 1 from `design-system.md`'s Key User Flows plus the actual running product once it exists.
-- Added four items to `CLAUDE.md` after initial generation: a mandatory post-change verification command, two commit-discipline rules, a rule pinning the AI service fallback order to `backend/services/` (changes require updating `architecture.md`), and a Code Style section (Ruff defaults + type hints for Python; strict mode, single quotes, named exports for TypeScript).
+## Key Decisions Made (to be mirrored into `docs/architecture.md` decision log at session end)
+
+- **psycopg3 as the single Postgres driver** — one driver serves both the SQLAlchemy async API
+  engine (`postgresql+psycopg`) and APScheduler's sync `SQLAlchemyJobStore`. Avoids asyncpg+psycopg2 sprawl.
+- **time_series indexing** — a single `UNIQUE (country_code, indicator_id, date)` constraint backs
+  both upsert and the documented `(…, date DESC)` lookup (a btree scans backward), so the separate
+  DESC index in `architecture.md` was intentionally omitted as redundant. Composite PK `(id, date)`
+  is required because the table is partitioned on `date`.
+- **Two partitioning paths** — pg_partman primary + a guaranteed manual fallback, responding to the
+  flagged "verify pg_partman at project creation" open question. Record which path you run.
+- **Scheduler add-if-absent** — the WB job is only added when not already in the store, so a restart
+  demonstrably reloads it from Postgres rather than recreating it.
+- **country_profiles seed** — `imf_classification` is a documented heuristic (IMF WEO Advanced list +
+  WB income group), not fetched IMF data. `population_bracket` left null (Phase 2 enrichment).
+- **Phase 1 job scope** — a curated 20-country focus set × 8 annual indicators (see `config.py`) to
+  keep free-tier ingestion light; broadened in Phase 2.
 
 ## Open Blockers
 
-- No accounts or keys exist yet: Supabase project, Render account, Vercel account, FRED API key, and Mistral/Groq/OpenRouter/Google AI Studio keys all need to be created, plus the custom subdomain pointed at Vercel, before Phase 1 can finish.
-- `pg_partman` availability must be verified on a fresh Supabase project — the architecture assumes it's enabled, but this has not been confirmed hands-on (see `agent_docs/strategy.md`'s open questions).
-- Mistral's free-tier terms and Google AI Studio's current rate limits should be re-checked before Phase 3 wires them in — both were flagged as possibly stale by build time.
+- **No cloud accounts/secrets yet** — Supabase project, Render, Vercel, UptimeRobot, and the GitHub
+  remote all require the user. All code + configs are being written to hand off; deploy + the live
+  end-to-end checkpoint cannot be completed by me. (`gh` CLI is not installed locally either.)
+- **Local Python is 3.13/3.14, not the 3.12 target** — verification will run on 3.13; CI pins 3.12.
+- **Nothing is verified yet** — `ruff`/`pytest`/`build` have not run; only byte-compilation has.
 
 ## Phase Progress Tracker
 
 | Phase | Name | Status |
 |---|---|---|
-| 1 | Foundation | ⬜ |
+| 1 | Foundation | 🚧 In Progress |
 | 2 | Core Feature(s) | ⬜ |
 | 3 | Intelligence Layer | ⬜ |
 | 4 | Polish & Production Readiness | ⬜ |
 | 5+ | Stretch Goals (Optional) | ⬜ |
 
-## Next Session Goal
+## Next Session Goal (remaining Phase 1 work, in order)
 
-**Objective:** Scaffold the repository and deploy a working end-to-end skeleton, proving the full pipeline (fetch → validate → store → serve) with one real connector (World Bank).
-
-1. Initialize the GitHub repo with the `/frontend`, `/backend`, `/agent_docs` monorepo structure.
-2. Provision the Supabase project, enable `pgvector`, and run the full schema migration.
-3. Scaffold and deploy the FastAPI backend (`/health` endpoint) to Render.
-4. Scaffold and deploy the Next.js frontend (placeholder page) to Vercel.
-5. Build `BaseDataSourceConnector` and the World Bank connector.
-6. Wire APScheduler with a `SQLAlchemyJobStore` persisted to Supabase; verify it survives a restart.
-7. Populate `country_profiles` with static reference data.
-8. Set up GitHub Actions CI (lint + tests).
-9. Configure UptimeRobot pings for Render and Supabase.
-10. Run the post-change verification commands (`npm run build && npm test`; `pytest && ruff check .`).
-11. Update this file before ending the session.
+1. Backend tests (health/status, WB connector normalize+fetch, base validation) + `ruff check`.
+2. Create venv (py3.13), `pip install`, run `ruff` + `pytest` until green. Verify WB connector live.
+3. Scaffold the Next.js 15 frontend placeholder (on-brand) calling the backend; Vitest + lint + build.
+4. GitHub Actions CI (py3.12 backend; Node frontend). `render.yaml` + Vercel config.
+5. `DEPLOYMENT.md` handoff checklist (Supabase apply, Render/Vercel deploy, UptimeRobot, GitHub push).
+6. Update `docs/features.md` statuses; mirror decisions above into `docs/architecture.md`.
+7. Hand off cloud provisioning; complete the live checkpoint with the user.
 
 ## Completed Phases Log
 
-None yet — the project is at the blueprint stage; no build phase has started.
+None yet — Phase 1 in progress.
 
 ## Agent Instructions for Updating This File
 <!-- Read before writing the updated file -->
 - Replace the entire file at the end of every session — never append
 - Update "Last Session Summary" with this session's work only
 - Update "Next Session Goal" with an ordered task list for what logically comes next
-- Add any new packages/dependencies to a running log in this file
-- Log new architectural decisions in `agent_docs/architecture.md` AND reference them here
-- Keep the file under 150 lines — summarise, don't transcribe
+- Add any new packages/dependencies to the running log in this file
+- Log new architectural decisions in `docs/architecture.md` AND reference them here
+- Keep the file concise — summarise, don't transcribe
 - Always include the session date at the top of "Last Session Summary"

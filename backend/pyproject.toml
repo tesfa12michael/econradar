@@ -1,0 +1,39 @@
+[project]
+name = "econradar-backend"
+version = "0.1.0"
+description = "EconRadar backend — FastAPI ETL, connectors, AI services, scheduler."
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Modules are top-level (run as `uvicorn main:app` from this dir), so treat
+# them as first-party for import sorting.
+src = ["."]
+
+[tool.ruff.lint]
+# Sensible, not noisy: pycodestyle/pyflakes + import sort, bugbear, pyupgrade,
+# comprehensions, and a few correctness-focused sets.
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM", "TID", "RUF"]
+ignore = [
+    "E501",   # line length handled by the formatter, not the linter
+    "B008",   # FastAPI uses function calls (Depends()) in argument defaults by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # asserts are expected in tests
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "config", "db", "models", "schemas", "logging_config",
+    "connectors", "services", "scheduler", "routers", "repositories",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+addopts = "-m 'not network' -q"
+markers = [
+    "network: test performs a real outbound network call (deselected by default; run with -m network)",
+]
+testpaths = ["tests"]
+pythonpath = ["."]
