@@ -233,6 +233,10 @@ Step 9  All responses cached at the Supabase layer — next request for the same
 | 8 | LLM role boundary | LLM narrates numbers only — never generates them | LLM as end-to-end analyst | LLMs hallucinate statistics. Chronos-2 produces the numbers; the LLM only turns them into prose, and the groundedness verifier enforces this programmatically. |
 | 9 | VLM pipeline | Server-side Plotly PNG → Gemini Flash | Client-side screenshot | Server-side rendering is deterministic and reproducible, unaffected by browser state or viewport size. |
 | 10 | Embeddings | Sentence-Transformers fallback (self-hosted) | API-only embeddings | If Mistral's embedding API rate-limits, the system falls back to a locally-run model on Render's CPU — the RAG pipeline never goes fully offline. |
+| 11 | Postgres driver (Phase 1) | psycopg3 as the single driver (sync + async) | asyncpg + psycopg2 split | One driver serves both the SQLAlchemy async API engine (`postgresql+psycopg`) and APScheduler's sync `SQLAlchemyJobStore` — fewer moving parts, one wheel to build. |
+| 12 | `time_series` indexing (Phase 1) | One `UNIQUE (country_code, indicator_id, date)` | that index **plus** a separate `(…, date DESC)` index | The unique constraint backs upsert AND the documented latest-first lookup (a btree scans backward), so the schema outline's separate DESC index was intentionally omitted as redundant. Composite PK `(id, date)` is required because the table is partitioned on `date`. |
+| 13 | Partitioning rollout (Phase 1) | pg_partman primary path + a guaranteed manual fallback file | pg_partman only | pg_partman availability is verify-at-build-time (see strategy.md). The manual yearly-partition fallback guarantees a working partitioned table on any Supabase project. |
+| 14 | Scheduler job registration (Phase 1) | Add the job only if absent from the store | `replace_existing=True` on every boot | Makes restart-persistence demonstrable: after a restart the job is reloaded from Postgres rather than recreated, and the "already present" log line proves it. |
 
 ## Database Schema Outline
 

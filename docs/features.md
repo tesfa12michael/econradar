@@ -10,14 +10,14 @@ Status legend: `[ ]` Not Started · `[~]` In Progress · `[x]` Complete
 ## Phase 1 — Foundation
 
 ### Foundation Infrastructure & First Connector
-**Status:** [ ] Not Started
+**Status:** [~] In Progress — backend code complete & locally verified (ruff clean; 18 unit tests + 1 live World Bank fetch green); frontend scaffolded (build/lint/test verification in progress). Live deploy (Vercel→Render→Supabase) and the scheduler-restart proof are pending cloud provisioning — see `DEPLOYMENT.md`.
 **Description:** Repo scaffold, full Supabase schema migration (all tables from `architecture.md`), deployed FastAPI/Next.js skeleton, `BaseDataSourceConnector` abstract class with a working World Bank connector as proof of concept, APScheduler wired to a persisted `SQLAlchemyJobStore`, GitHub Actions CI, UptimeRobot keep-alive.
 **Acceptance Criteria:** A public Vercel frontend calls a public Render backend, which reads real World Bank data out of Supabase through one working API endpoint; the scheduled job survives a manual backend restart; CI is green on `main`.
 **Known Edge Cases:** `pg_partman` extension availability must be verified at Supabase project creation, not assumed; Render/Vercel first-deploy configuration quirks (env var propagation, build command detection).
 **Dependencies:** None — this is the starting point for everything else.
 
 ### 1.3 Time-Series Storage (Supabase PostgreSQL)
-**Status:** [ ] Not Started
+**Status:** [~] In Progress — full schema migration (all 10 tables), `time_series` RANGE partitioning (pg_partman primary + manual fallback), and reference/country seeds are written; not yet applied to a live Supabase project. See `supabase/README.md` and `DEPLOYMENT.md`.
 **Description:** Partitioned time-series tables via `pg_partman`, organized by `(country_code, indicator_code, source, date)`, plus the `indicators_catalog`, `data_sources`, and `country_profiles` metadata tables.
 **Acceptance Criteria:** Schema migration runs cleanly on a fresh Supabase project; partitions are created/pruned automatically as data spans years; a single country/indicator lookup stays fast as volume grows.
 **Known Edge Cases:** A country/indicator with decades of monthly data vs. one with a single annual data point — the partition strategy must handle both without special-casing.
