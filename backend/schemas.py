@@ -17,9 +17,9 @@ class TimeSeriesRecord(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    country_code: str          # ISO 3166-1 alpha-3
-    indicator_code: str        # source-native code, e.g. FP.CPI.TOTL.ZG
-    source_name: str           # data_sources.name, e.g. world_bank
+    country_code: str  # ISO 3166-1 alpha-3
+    indicator_code: str  # source-native code, e.g. FP.CPI.TOTL.ZG
+    source_name: str  # data_sources.name, e.g. world_bank
     date: dt.date
     value: float
     unit: str | None = None
@@ -43,6 +43,7 @@ class TimeSeriesRecord(BaseModel):
 
 
 # ── API response models ──────────────────────────────────────
+
 
 class CountryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -88,8 +89,8 @@ class HealthOut(BaseModel):
     status: str
     environment: str
     version: str
-    database: str            # connected | unavailable | not_configured
-    scheduler: str           # running | stopped | disabled
+    database: str  # connected | unavailable | not_configured
+    scheduler: str  # running | stopped | disabled
 
 
 class SourceStatusOut(BaseModel):

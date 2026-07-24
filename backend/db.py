@@ -11,7 +11,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from config import settings
 from logging_config import get_logger
@@ -34,7 +39,7 @@ def normalize_db_url(url: str) -> str:
     for scheme in _KNOWN_SCHEMES:
         prefix = scheme + "://"
         if url.startswith(prefix):
-            return "postgresql+psycopg://" + url[len(prefix):]
+            return "postgresql+psycopg://" + url[len(prefix) :]
     return url
 
 
@@ -82,7 +87,7 @@ async def check_db() -> bool:
         async with get_session_factory()() as session:
             await session.execute(text("select 1"))
         return True
-    except Exception as exc:  # noqa: BLE001 — health must never propagate
+    except Exception as exc:
         logger.warning("Database health check failed: %s", exc)
         return False
 

@@ -28,8 +28,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-_UUID_PK = dict(primary_key=True, server_default=text("gen_random_uuid()"))
-_NOW = dict(server_default=text("now()"))
+_UUID_PK = {"primary_key": True, "server_default": text("gen_random_uuid()")}
+_NOW = {"server_default": text("now()")}
 
 
 class Base(DeclarativeBase):
@@ -86,7 +86,9 @@ class TimeSeries(Base):
         UniqueConstraint("country_code", "indicator_id", "date", name="time_series_natural_key"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, primary_key=True, server_default=text("gen_random_uuid()")
+    )
     date: Mapped[dt.date] = mapped_column(Date, primary_key=True)
     country_code: Mapped[str] = mapped_column(String(3))
     indicator_id: Mapped[uuid.UUID] = mapped_column(

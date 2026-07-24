@@ -26,10 +26,46 @@ WB_COUNTRY_URL = "https://api.worldbank.org/v2/country?format=json&per_page=400"
 # IMF WEO "Advanced Economies" (ISO-3). Source: IMF World Economic Outlook groupings.
 IMF_ADVANCED: frozenset[str] = frozenset(
     {
-        "AND", "AUS", "AUT", "BEL", "CAN", "CHE", "CYP", "CZE", "DEU", "DNK",
-        "ESP", "EST", "FIN", "FRA", "GBR", "GRC", "HKG", "IRL", "ISL", "ISR",
-        "ITA", "JPN", "KOR", "LTU", "LUX", "LVA", "MAC", "MLT", "NLD", "NOR",
-        "NZL", "PRI", "PRT", "SGP", "SMR", "SVK", "SVN", "SWE", "TWN", "USA",
+        "AND",
+        "AUS",
+        "AUT",
+        "BEL",
+        "CAN",
+        "CHE",
+        "CYP",
+        "CZE",
+        "DEU",
+        "DNK",
+        "ESP",
+        "EST",
+        "FIN",
+        "FRA",
+        "GBR",
+        "GRC",
+        "HKG",
+        "IRL",
+        "ISL",
+        "ISR",
+        "ITA",
+        "JPN",
+        "KOR",
+        "LTU",
+        "LUX",
+        "LVA",
+        "MAC",
+        "MLT",
+        "NLD",
+        "NOR",
+        "NZL",
+        "PRI",
+        "PRT",
+        "SGP",
+        "SMR",
+        "SVK",
+        "SVN",
+        "SWE",
+        "TWN",
+        "USA",
     }
 )
 
@@ -65,7 +101,7 @@ def sql_str(value: str | None) -> str:
 
 def fetch_countries() -> list[dict]:
     req = urllib.request.Request(WB_COUNTRY_URL, headers={"User-Agent": "EconRadar-seed/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 (trusted URL)
+    with urllib.request.urlopen(req, timeout=30) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     # World Bank returns [metadata, [rows]]. Aggregates carry region.id == "NA".
     rows = payload[1]

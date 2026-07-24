@@ -127,9 +127,7 @@ class WorldBankConnector(BaseDataSourceConnector):
         pages = int(meta.get("pages", 1) or 1)
         return data, pages
 
-    async def _get_json(
-        self, client: httpx.AsyncClient, url: str, params: dict[str, Any]
-    ) -> Any:
+    async def _get_json(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
         """GET with exponential backoff on transport errors, 429s, and 5xx."""
         delay = _INITIAL_BACKOFF_S
         last_error: Exception | None = None
@@ -147,7 +145,9 @@ class WorldBankConnector(BaseDataSourceConnector):
             if attempt < _RETRYABLE_ATTEMPTS:
                 logger.warning(
                     "[world_bank] retry %d/%d after error: %s",
-                    attempt, _RETRYABLE_ATTEMPTS, last_error,
+                    attempt,
+                    _RETRYABLE_ATTEMPTS,
+                    last_error,
                 )
                 await asyncio.sleep(delay)
                 delay *= 2

@@ -17,17 +17,35 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # data-sparse regions EconRadar targets (Caribbean, Central America, Sub-Saharan
 # Africa). Kept small so free-tier ingestion stays light; broadened in Phase 2.
 DEFAULT_FOCUS_COUNTRIES: tuple[str, ...] = (
-    "USA", "CHN", "DEU", "IND", "BRA", "NGA", "ZAF", "KEN", "GHA", "ETH",
-    "JAM", "HTI", "DOM", "TTO", "GTM", "HND", "SLV", "CRI", "PAN", "MEX",
+    "USA",
+    "CHN",
+    "DEU",
+    "IND",
+    "BRA",
+    "NGA",
+    "ZAF",
+    "KEN",
+    "GHA",
+    "ETH",
+    "JAM",
+    "HTI",
+    "DOM",
+    "TTO",
+    "GTM",
+    "HND",
+    "SLV",
+    "CRI",
+    "PAN",
+    "MEX",
 )
 
 DEFAULT_WORLD_BANK_INDICATORS: tuple[str, ...] = (
     "NY.GDP.MKTP.KD.ZG",  # GDP growth (annual %)
-    "FP.CPI.TOTL.ZG",     # Inflation, consumer prices (annual %)
-    "NY.GDP.PCAP.CD",     # GDP per capita (current US$)
-    "SL.UEM.TOTL.ZS",     # Unemployment (% of labor force)
-    "NE.EXP.GNFS.ZS",     # Exports (% of GDP)
-    "NE.IMP.GNFS.ZS",     # Imports (% of GDP)
+    "FP.CPI.TOTL.ZG",  # Inflation, consumer prices (annual %)
+    "NY.GDP.PCAP.CD",  # GDP per capita (current US$)
+    "SL.UEM.TOTL.ZS",  # Unemployment (% of labor force)
+    "NE.EXP.GNFS.ZS",  # Exports (% of GDP)
+    "NE.IMP.GNFS.ZS",  # Imports (% of GDP)
     "GC.DOD.TOTL.GD.ZS",  # Central government debt (% of GDP)
     "BN.CAB.XOKA.GD.ZS",  # Current account balance (% of GDP)
 )
@@ -43,7 +61,7 @@ class Settings(BaseSettings):
 
     # ── Core app ──
     environment: str = "development"
-    app_version: str = "0.1.0"   # override with a git SHA in production if desired
+    app_version: str = "0.1.0"  # override with a git SHA in production if desired
     log_level: str = "INFO"
     api_v1_prefix: str = "/api/v1"
     # Comma-separated origins allowed by CORS (the Vercel URL in production).

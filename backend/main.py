@@ -5,8 +5,8 @@ Run locally:  uvicorn main:app --reload
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +23,11 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
-    logger.info("EconRadar backend starting (env=%s, version=%s)", settings.environment, settings.app_version)
+    logger.info(
+        "EconRadar backend starting (env=%s, version=%s)",
+        settings.environment,
+        settings.app_version,
+    )
     start_scheduler()  # non-fatal if disabled or no DATABASE_URL
     try:
         yield

@@ -41,7 +41,7 @@ async def status(session: AsyncSession = Depends(get_session)) -> StatusOut:
         indicators = await repositories.count_indicators(session)
         sources = await repositories.list_sources(session)
         overall = "operational"
-    except Exception as exc:  # noqa: BLE001 — degrade gracefully, never 500 the status page
+    except Exception as exc:
         logger.warning("status endpoint degraded: %s", exc)
         return StatusOut(
             status="degraded",

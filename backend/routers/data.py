@@ -19,7 +19,9 @@ router = APIRouter(tags=["data"])
 def _iso3(country_code: str) -> str:
     code = country_code.strip().upper()
     if len(code) != 3 or not code.isalpha():
-        raise HTTPException(status_code=422, detail=f"country_code must be ISO-3 alpha, got {country_code!r}")
+        raise HTTPException(
+            status_code=422, detail=f"country_code must be ISO-3 alpha, got {country_code!r}"
+        )
     return code
 
 

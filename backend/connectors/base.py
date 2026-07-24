@@ -42,7 +42,7 @@ class ValidationError(Exception):
     """A normalized record failed a validation rule."""
 
 
-class SkipRecord(Exception):  # noqa: N818 — intentionally not an "...Error"
+class SkipRecord(Exception):
     """A raw record is legitimately empty (e.g. a null value for a year) — skip,
     don't count as a failure."""
 
@@ -137,7 +137,7 @@ class BaseDataSourceConnector(ABC):
             await self._log_errors(factory, run_id, rejected)
             status = self._status(fetched, inserted, len(rejected))
             await self._finish_run(factory, run_id, fetched, inserted, len(rejected), status)
-        except Exception as exc:  # noqa: BLE001 — a connector failure must not crash the scheduler
+        except Exception as exc:
             logger.exception("[%s] pipeline run %s failed hard", self.source_name, run_id)
             await self._log_errors(
                 factory, run_id, [_RejectedRecord(None, type(exc).__name__, str(exc))]
@@ -147,7 +147,13 @@ class BaseDataSourceConnector(ABC):
 
         logger.info(
             "[%s] run %s done: status=%s fetched=%d inserted=%d failed=%d skipped=%d",
-            self.source_name, run_id, status, fetched, inserted, len(rejected), skipped,
+            self.source_name,
+            run_id,
+            status,
+            fetched,
+            inserted,
+            len(rejected),
+            skipped,
         )
         return PipelineRunResult(run_id, status, fetched, inserted, len(rejected), skipped)
 
@@ -178,7 +184,9 @@ class BaseDataSourceConnector(ABC):
         stmt = (
             pg_insert(DataSource)
             .values(name=self.source_name, base_url=self.base_url)
-            .on_conflict_do_update(index_elements=[DataSource.name], set_={"base_url": self.base_url})
+            .on_conflict_do_update(
+                index_elements=[DataSource.name], set_={"base_url": self.base_url}
+            )
             .returning(DataSource.id)
         )
         return (await session.execute(stmt)).scalar_one()

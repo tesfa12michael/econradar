@@ -34,9 +34,7 @@ async def count_indicators(session: AsyncSession) -> int:
 
 
 async def list_sources(session: AsyncSession) -> list[SourceStatusOut]:
-    rows = (
-        await session.execute(select(DataSource).order_by(DataSource.name))
-    ).scalars().all()
+    rows = (await session.execute(select(DataSource).order_by(DataSource.name))).scalars().all()
     return [
         SourceStatusOut(
             name=r.name, is_active=r.is_active, last_successful_run=r.last_successful_run
@@ -69,9 +67,7 @@ async def get_indicator_series(
 
     country_name = (
         await session.execute(
-            select(CountryProfile.country_name).where(
-                CountryProfile.country_code == country_code
-            )
+            select(CountryProfile.country_name).where(CountryProfile.country_code == country_code)
         )
     ).scalar_one_or_none()
 
