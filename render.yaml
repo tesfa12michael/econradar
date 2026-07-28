@@ -9,7 +9,9 @@ services:
     name: econradar-backend
     runtime: python
     plan: free
-    region: oregon
+    # Co-located with the Supabase project (eu-west-1 / Ireland) to keep DB
+    # round-trips ~20 ms instead of ~140 ms from a US region.
+    region: frankfurt
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
