@@ -18,8 +18,8 @@ from pathlib import Path
 # Allow running as `python scripts/smoke_ingest.py` from the backend/ dir.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import settings  # noqa: E402
-from connectors import WorldBankConnector  # noqa: E402
+from config import settings
+from connectors import WorldBankConnector
 
 
 async def main() -> int:
