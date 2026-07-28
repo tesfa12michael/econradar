@@ -37,4 +37,8 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        # psycopg3's async driver rejects Windows' default ProactorEventLoop;
+        # the selector loop is required for local runs (production runs on Linux).
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     raise SystemExit(asyncio.run(main()))
