@@ -12,12 +12,17 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
+from config import settings
 from db import get_session
 from main import app
 
 
 @pytest.fixture
-def client() -> Iterator[TestClient]:
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    # Hermetic boot: ignore any developer-local .env so the app comes up with no
+    # database and the scheduler stopped, matching the clean-CI environment.
+    monkeypatch.setattr(settings, "database_url", None)
+    monkeypatch.setattr(settings, "scheduler_enabled", False)
     with TestClient(app) as c:
         yield c
 
