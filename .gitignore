@@ -48,3 +48,10 @@ scratch/
 
 # ── Claude Code local tooling (generic skill libraries, not project source) ──
 .claude/
+
+# ── Internal working docs (kept local; the polished public repo is built later) ──
+/CLAUDE.md
+/PROGRESS.md
+/DEPLOYMENT.md
+/DEMO_SCRIPT.md
+/docs/
