@@ -166,6 +166,18 @@ async def test_fred_self_disables_without_a_key() -> None:
     assert await c.fetch() == []
 
 
+async def test_unconfigured_source_records_no_pipeline_run() -> None:
+    """A source that never ran must not claim a last_successful_run on /status.
+
+    run() short-circuits before touching the database, so no session factory is
+    needed — which is also what proves nothing was written.
+    """
+    result = await FREDConnector(api_key=None).run()
+    assert result.status == "skipped"
+    assert result.run_id is None
+    assert result.records_inserted == 0
+
+
 def test_fred_maps_series_id_to_country_and_indicator() -> None:
     c = FREDConnector(api_key="test")
     rec = c.normalize({"series_id": "FEDFUNDS", "date": "2026-06-01", "value": "4.33"})

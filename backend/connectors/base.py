@@ -115,6 +115,17 @@ class BaseDataSourceConnector(ABC):
     def indicator_display_name(self, code: str) -> str:
         return self._indicator_names.get(code, code)
 
+    @property
+    def is_configured(self) -> bool:
+        """Whether this source has everything it needs to run (e.g. an API key).
+
+        Overridden by FRED, the only keyed source. A connector that cannot run must not
+        record a pipeline run at all: a "success" with zero rows would set
+        `last_successful_run` and make /status claim a source is healthy when it has in
+        fact never once been reached.
+        """
+        return True
+
     def value_kind(self, indicator_code: str) -> ValueKind | None:
         """Semantic kind of an indicator's values, enabling plausibility bounds.
 
@@ -172,6 +183,15 @@ class BaseDataSourceConnector(ABC):
     async def run(self, **fetch_kwargs: Any) -> PipelineRunResult:
         """Fetch → normalize → validate → persist, with full run/error logging."""
         factory = self._session_factory or get_session_factory()
+
+        if not self.is_configured:
+            logger.warning(
+                "[%s] not configured — skipping. No pipeline run recorded, so /status "
+                "will not report this source as having succeeded.",
+                self.source_name,
+            )
+            return PipelineRunResult(None, "skipped", 0, 0, 0, 0)
+
         run_id = await self._start_run(factory)
         logger.info("[%s] pipeline run %s started", self.source_name, run_id)
 
@@ -360,10 +380,13 @@ class BaseDataSourceConnector(ABC):
                 )
             )
             if status in ("success", "partial"):
+                # Also flip is_active: the seed registers the non-Phase-1 sources as
+                # inactive, so a source that is demonstrably ingesting would otherwise
+                # keep reporting itself inactive on /status.
                 await session.execute(
                     update(DataSource)
                     .where(DataSource.name == self.source_name)
-                    .values(last_successful_run=text("now()"))
+                    .values(last_successful_run=text("now()"), is_active=True)
                 )
             await session.commit()
 

@@ -134,6 +134,7 @@ class FREDConnector(BaseDataSourceConnector):
 
     @property
     def is_configured(self) -> bool:
+        """False without an API key, which makes run() skip without recording a run."""
         return bool(self._api_key)
 
     def value_kind(self, indicator_code: str) -> ValueKind | None:
