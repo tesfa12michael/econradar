@@ -101,6 +101,13 @@ class WorldBankConnector(BaseDataSourceConnector):
         EMU (Euro area) and WLD (World) carry perfectly well-formed three-letter codes
         and would otherwise be stored as if they were countries, quietly skewing every
         world average on the dashboard. The API marks aggregates with region.id == "NA".
+
+        Failure to load the index **aborts the run**. Falling back to a shape check
+        looks tolerant but is worse than useless here: it silently admitted 6,765
+        Global Economic Monitor aggregate rows (LAC, HIY, MIC...) during a run where
+        this request failed. A missed refresh is recoverable on the next cadence;
+        aggregates written into the time series quietly corrupt every cross-country
+        statistic until someone notices.
         """
         try:
             payload = await get_json(
@@ -111,13 +118,15 @@ class WorldBankConnector(BaseDataSourceConnector):
             )
             rows = payload[1] if isinstance(payload, list) and len(payload) == 2 else []
         except Exception as exc:
-            logger.warning(
-                "[%s] could not load the /country index (%s); falling back to a shape "
-                "check, which cannot exclude 3-letter aggregates",
-                self.source_name,
-                exc,
+            raise SourceAPIError(
+                f"{self.source_name}: could not load the /country index, so aggregates "
+                f"cannot be distinguished from countries — aborting rather than risk "
+                f"storing them ({exc})"
+            ) from exc
+        if not rows:
+            raise SourceAPIError(
+                f"{self.source_name}: the /country index returned no rows — aborting"
             )
-            return
 
         self._known_countries = {
             str(row.get("id") or "").strip().upper()
@@ -291,7 +300,8 @@ class WorldBankConnector(BaseDataSourceConnector):
             if code not in self._known_countries:
                 raise SkipRecord(f"aggregate/grouping code: {code!r}")
             return code
-        # Degraded path: no index available, so fall back to a shape check.
+        # Only reachable when normalize() is exercised directly (unit tests); fetch()
+        # aborts the run rather than proceeding without the index.
         if len(code) != 3 or not code.isalpha():
             raise NormalizationError(f"non-ISO-3 country code: {code!r}")
         return code

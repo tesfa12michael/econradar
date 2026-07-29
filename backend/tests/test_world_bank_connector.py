@@ -8,7 +8,13 @@ import datetime as dt
 import httpx
 import pytest
 
-from connectors import NormalizationError, SkipRecord, ValidationError, WorldBankConnector
+from connectors import (
+    NormalizationError,
+    SkipRecord,
+    SourceAPIError,
+    ValidationError,
+    WorldBankConnector,
+)
 from schemas import TimeSeriesRecord
 
 
@@ -107,11 +113,22 @@ def test_real_country_passes_the_index_check() -> None:
     assert c.normalize(_row(countryiso3code="NGA")).country_code == "NGA"
 
 
-def test_index_check_is_skipped_when_the_index_is_unavailable() -> None:
-    """Degraded path: without the index, a shape check is better than rejecting all."""
-    c = WorldBankConnector()
-    assert c._known_countries == set()
-    assert c.normalize(_row(countryiso3code="ARB")).country_code == "ARB"
+async def test_fetch_aborts_when_the_country_index_is_unavailable() -> None:
+    """Without the index, aggregates cannot be told from countries — so do not guess.
+
+    A permissive fallback silently admitted 6,765 GEM aggregate rows in a real run.
+    A missed refresh is recoverable; corrupted cross-country statistics are not.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if _is_country_index(request):
+            return httpx.Response(500)
+        return httpx.Response(200, json=[{"pages": 1}, [_row()]])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        c = WorldBankConnector(client=http)
+        with pytest.raises(SourceAPIError):
+            await c.fetch(indicator_codes=["NY.GDP.MKTP.KD.ZG"], countries=["NGA"])
 
 
 def test_validate_flags_and_rejects_non_finite() -> None:
@@ -143,8 +160,25 @@ def test_extract_handles_no_data_payload() -> None:
     assert pages == 0
 
 
+def _is_country_index(request: httpx.Request) -> bool:
+    """The /country index request fetch() makes before pulling any indicator."""
+    return request.url.path.rstrip("/").endswith("/country")
+
+
+def _country_index_response(*codes: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json=[
+            {"page": 1, "pages": 1, "per_page": 400, "total": len(codes)},
+            [{"id": c, "region": {"id": "SSF"}} for c in codes],
+        ],
+    )
+
+
 async def test_fetch_paginates_and_collects() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if _is_country_index(request):
+            return _country_index_response("NGA")
         page = request.url.params.get("page")
         meta = {"page": int(page), "pages": 2, "per_page": 1000, "total": 2}
         year = "2025" if page == "1" else "2024"

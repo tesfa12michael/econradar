@@ -170,16 +170,21 @@ async def get_map_data(session: AsyncSession, indicator_code: str) -> MapDataOut
     if not rows:
         return None
 
+    # Flag only countries whose *displayed* observation is the anomalous one. Asking
+    # "has this country ever been anomalous" marks ~205 of 214 across sixty years of
+    # history, which makes the marker meaningless; this way it says something true
+    # about the number on screen.
+    latest_dates = {r.country_code: r.date for r in rows}
     flagged = {
         code
-        for (code,) in (
+        for code, date in (
             await session.execute(
-                select(Anomaly.country_code)
+                select(Anomaly.country_code, Anomaly.date)
                 .join(IndicatorCatalog, Anomaly.indicator_id == IndicatorCatalog.id)
                 .where(IndicatorCatalog.indicator_code == indicator_code)
-                .distinct()
             )
         ).all()
+        if latest_dates.get(code) == date
     }
 
     names = dict(

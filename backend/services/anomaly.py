@@ -9,7 +9,14 @@ never to reject it.
 **No LLM involvement.** Magnitude, direction and timestamp only; the grounded
 narrative explanation is feature 2.3 in Phase 3.
 
-Two edge cases from features.md shape the design:
+Scores are taken against a **local linear trend**, not against the window's level.
+Comparing a value to its recent average flags every point of a trending series: GDP per
+capita only ever rises, so each new observation sits above the trailing median by
+construction, and a level-based score flagged 204 of 214 countries. What matters is
+whether a point departs from where the recent trend was heading, so the window is fitted
+with least squares, the next value predicted, and the *residual* scored.
+
+Three edge cases from features.md shape the rest:
 
 * *"The first few points of a new series lack enough history for a meaningful rolling
   Z-score."* Scoring starts only once `min_observations` points precede a value, and
@@ -17,14 +24,17 @@ Two edge cases from features.md shape the design:
   future.
 * *"A naturally volatile indicator may falsely flag constantly under a fixed
   threshold."* A plain standard deviation is itself distorted by the outliers it is
-  meant to find, so the Z-score is computed against a **median/MAD** estimate, which a
+  meant to find, so spread is estimated from the **MAD of the fit residuals**, which a
   single extreme point cannot inflate. A candidate must additionally fall outside the
-  window's Tukey IQR fence, so volatile-but-consistent series stay quiet.
+  residuals' Tukey IQR fence, so volatile-but-consistent series stay quiet.
+* A perfectly flat window has no residual spread at all, making a Z-score undefined
+  rather than large — the normal shape of a held policy rate. See `detect`.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import math
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -51,6 +61,13 @@ _FLAT_TOLERANCE: Final = 1e-9
 #: See _is_large_move — this is what stops routine rate decisions flooding the map.
 _BREAK_STEP_MULTIPLE: Final = 3.0
 
+#: Residual spread below this fraction of the series' scale is treated as *no* spread.
+#: A window that the trend fits almost perfectly (a held rate, or a rate climbing in
+#: identical steps) yields a sigma near zero, which would turn any deviation into an
+#: enormous Z-score. Such a window is not "extremely precise" — the Z-score machinery
+#: simply does not apply, so those points go to the step-magnitude test instead.
+_SIGMA_EPSILON: Final = 1e-6
+
 
 @dataclass(frozen=True, slots=True)
 class Observation:
@@ -68,14 +85,63 @@ class Anomaly:
     deviation_type: str
 
 
-def _robust_sigma(window: Sequence[float], centre: float) -> float:
-    """Median-absolute-deviation estimate of sigma, resistant to the outliers we hunt."""
-    mad = statistics.median([abs(v - centre) for v in window])
+def _robust_sigma(residuals: Sequence[float]) -> float:
+    """MAD estimate of sigma from fit residuals, resistant to the outliers we hunt."""
+    mad = statistics.median([abs(r) for r in residuals])
     if mad > 0:
         return mad * _MAD_TO_SIGMA
-    # A window that is entirely constant has no spread; fall back to stdev so a step
-    # change out of a flat series is still detectable.
-    return statistics.pstdev(window) if len(window) > 1 else 0.0
+    # Residuals that are all zero mean a perfectly clean fit (a flat or perfectly
+    # linear window); fall back to stdev so a genuine step is still detectable.
+    return statistics.pstdev(residuals) if len(residuals) > 1 else 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class _Fit:
+    """A local trend fitted to one window."""
+
+    #: Prediction for the next point, in the series' original units.
+    predicted: float
+    #: Fit residuals, in whichever space the fit was performed.
+    residuals: list[float]
+    log_space: bool
+
+    def residual_of(self, value: float) -> float:
+        if self.log_space and value > 0 and self.predicted > 0:
+            return math.log(value) - math.log(self.predicted)
+        return value - self.predicted
+
+
+def _local_trend(window: Sequence[float]) -> _Fit:
+    """Fit the window with least squares, in log space when the series is positive.
+
+    A linear fit is what makes a trending series scoreable at all: without it, "above
+    the recent average" and "unusual" are the same statement. But economic levels grow
+    *multiplicatively* — GDP per capita compounds — and a straight line through a curve
+    leaves residuals that grow with the trend, which reintroduces the false flags.
+    Fitting log values turns exponential growth into a straight line and makes residuals
+    relative, so steady compounding scores as unremarkable.
+
+    Log space needs strictly positive values, so rates and balances that cross zero
+    (inflation, GDP growth, current account) are fitted linearly — which is right for
+    them anyway, since those series are already changes rather than levels.
+    """
+    log_space = all(v > 0 for v in window)
+    values = [math.log(v) for v in window] if log_space else list(window)
+    xs = list(range(len(values)))
+
+    try:
+        slope, intercept = statistics.linear_regression(xs, values)
+    except statistics.StatisticsError:  # degenerate window (fewer than two points)
+        median = statistics.median(values)
+        slope, intercept = 0.0, median
+
+    residuals = [v - (intercept + slope * x) for v, x in zip(values, xs, strict=True)]
+    predicted = intercept + slope * len(values)
+    return _Fit(
+        predicted=math.exp(predicted) if log_space else predicted,
+        residuals=residuals,
+        log_space=log_space,
+    )
 
 
 def _differs(value: float, centre: float) -> bool:
@@ -145,17 +211,21 @@ def detect(
             continue  # not enough history for the score to mean anything
 
         window = [o.value for o in series[max(0, index - window_size) : index]]
-        centre = statistics.median(window)
-        sigma = _robust_sigma(window, centre)
+        fit = _local_trend(window)
+        predicted = fit.predicted
+        sigma = _robust_sigma(fit.residuals)
 
-        if sigma <= 0:
-            # A perfectly flat window has no spread, so a Z-score is undefined rather
-            # than large. This is the normal shape of a held policy rate — but a
-            # central bank moving rates is routine, not anomalous, and flagging every
-            # step produced ~68 "anomalies" per BIS series. So the break must also be
-            # large relative to how that series normally moves.
-            if _differs(current.value, centre) and _is_large_move(
-                series, index, current.value, centre
+        # In log space residuals are already relative, so the floor is absolute.
+        floor = _SIGMA_EPSILON if fit.log_space else max(abs(predicted), 1.0) * _SIGMA_EPSILON
+        if sigma <= floor:
+            # A perfectly flat (or perfectly linear) window leaves no residual spread,
+            # so a Z-score is undefined rather than large. This is the normal shape of a
+            # held policy rate — but a central bank moving rates is routine, not
+            # anomalous, and flagging every step produced ~68 "anomalies" per BIS
+            # series. So the break must also be large relative to how that series
+            # normally moves.
+            if _differs(current.value, predicted) and _is_large_move(
+                series, index, current.value, predicted
             ):
                 found.append(
                     Anomaly(
@@ -167,12 +237,13 @@ def detect(
                 )
             continue
 
-        z_score = (current.value - centre) / sigma
+        residual = fit.residual_of(current.value)
+        z_score = residual / sigma
         if abs(z_score) < threshold:
             continue
 
-        low, high = _iqr_fence(window)
-        if low <= current.value <= high:
+        low, high = _iqr_fence(fit.residuals)
+        if low <= residual <= high:
             continue  # volatile but within its own spread — not an anomaly
 
         found.append(

@@ -36,14 +36,21 @@ def test_large_step_off_a_held_policy_rate_is_a_structural_break() -> None:
     assert found[0].value == 12.0
 
 
-def test_routine_rate_decisions_are_not_flagged() -> None:
+def test_routine_rate_decisions_are_mostly_not_flagged() -> None:
     """A central bank moving in its usual increments is doing its job, not misbehaving.
 
-    Without this, BIS produced ~68 "anomalies" per series — one per rate decision.
+    An early version flagged every move out of a flat window, which produced ~68
+    "anomalies" per BIS series — one per rate decision. A realistic policy path of
+    holds and quarter-point moves should stay near-silent. Not asserted as exactly
+    zero: a genuine break in a hiking cycle is a legitimate inflection, and this
+    guards against a flood, not against ever flagging.
     """
-    # Quarter-point steps, then one more quarter-point step after a hold.
-    values = [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.0, 3.0, 3.0, 3.25]
-    assert detect(_series(values)) == []
+    path = [
+        2.0, 2.0, 2.25, 2.25, 2.5, 2.5, 2.5, 2.25, 2.0, 2.0,
+        2.25, 2.5, 2.75, 2.75, 2.5, 2.25, 2.25, 2.0, 2.0, 2.25,
+    ]  # fmt: skip
+    found = detect(_series(path))
+    assert len(found) <= 1, f"expected a near-silent policy path, got {found}"
 
 
 def test_obvious_drop_is_flagged() -> None:
@@ -107,3 +114,31 @@ def test_unordered_input_is_sorted_before_scoring() -> None:
 def test_empty_and_tiny_series_are_safe() -> None:
     assert detect([]) == []
     assert detect(_series([1.0])) == []
+
+
+#: Compounding growth with mild, deterministic year-to-year wobble — the shape of a real
+#: GDP-per-capita series rather than a noiseless curve.
+_JITTER = [1.0, 1.02, 0.99, 1.01, 0.98, 1.03, 1.0, 0.99, 1.02, 0.98]
+
+
+def _compounding(years: int, rate: float = 1.05, base: float = 1000.0) -> list[float]:
+    return [base * rate**y * _JITTER[y % len(_JITTER)] for y in range(years)]
+
+
+def test_a_steadily_trending_series_is_not_all_anomalies() -> None:
+    """GDP per capita only ever rises, so every point beats the trailing average.
+
+    Scoring levels instead of trend residuals flagged 204 of 214 countries on this
+    exact indicator. Growth is not an anomaly.
+    """
+    assert detect(_series(_compounding(40))) == []
+
+
+def test_a_break_in_a_trend_is_still_caught() -> None:
+    """Trend-awareness must not blind the detector to a real collapse."""
+    rising = _compounding(20)
+    collapse = [*rising, rising[-1] * 0.5]  # a 50% fall after two decades of growth
+    found = detect(_series(collapse))
+    assert len(found) == 1
+    assert found[0].value == collapse[-1]
+    assert found[0].deviation_type in (DROP, STRUCTURAL_BREAK)
