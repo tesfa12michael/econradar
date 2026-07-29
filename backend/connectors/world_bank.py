@@ -14,7 +14,6 @@ deferred to Phase 2.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import httpx
@@ -24,14 +23,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from config import settings
 from connectors.base import BaseDataSourceConnector, NormalizationError, SkipRecord
 from connectors.dates import UnparseableDate, parse_period
+from connectors.http import SourceAPIError, get_json
 from connectors.validation import ValueKind
 from logging_config import get_logger
 from schemas import TimeSeriesRecord
 
 logger = get_logger(__name__)
 
-_RETRYABLE_ATTEMPTS = 4
-_INITIAL_BACKOFF_S = 0.5
+#: Retained as an alias so existing imports keep working after retry/backoff moved
+#: into the shared connectors/http.py used by all five sources.
+WorldBankAPIError = SourceAPIError
 
 #: The World Bank leaves `unit` blank on essentially every WDI row, so units for the
 #: curated indicator set are declared here and mirror supabase/seeds/0004.
@@ -58,10 +59,6 @@ _VALUE_KINDS: dict[str, ValueKind] = {
     "GC.DOD.TOTL.GD.ZS": ValueKind.PERCENT_SHARE,
     "BN.CAB.XOKA.GD.ZS": ValueKind.PERCENT_SHARE,
 }
-
-
-class WorldBankAPIError(Exception):
-    """The World Bank API was unreachable or returned a retryable error repeatedly."""
 
 
 class WorldBankConnector(BaseDataSourceConnector):
@@ -92,11 +89,14 @@ class WorldBankConnector(BaseDataSourceConnector):
         mrv: int | None = None,
         start_year: int | None = None,
         end_year: int | None = None,
+        date_range: str | None = None,
         **_: Any,
     ) -> list[dict]:
         """Fetch rows for each indicator across the given countries (de-paginated)."""
         indicator_codes = list(indicator_codes or settings.world_bank_indicators)
         countries_param = self._countries_param(countries)
+        if date_range is None and start_year is not None and end_year is not None:
+            date_range = f"{start_year}:{end_year}"
 
         owns_client = self._client is None
         client = self._client or httpx.AsyncClient(timeout=self._timeout)
@@ -104,9 +104,7 @@ class WorldBankConnector(BaseDataSourceConnector):
             rows: list[dict] = []
             for code in indicator_codes:
                 rows.extend(
-                    await self._fetch_indicator(
-                        client, countries_param, code, mrv, start_year, end_year
-                    )
+                    await self._fetch_indicator(client, countries_param, code, mrv, date_range)
                 )
             return rows
         finally:
@@ -120,26 +118,36 @@ class WorldBankConnector(BaseDataSourceConnector):
             return countries  # e.g. "all" or a single code
         return ";".join(countries)  # World Bank multi-country syntax
 
+    def _extra_params(self) -> dict[str, Any]:
+        """Extra query params for this surface. Subclasses add `source=N` (DataBank)."""
+        return {}
+
     async def _fetch_indicator(
         self,
         client: httpx.AsyncClient,
         countries_param: str,
         code: str,
         mrv: int | None,
-        start_year: int | None,
-        end_year: int | None,
+        date_range: str | None,
     ) -> list[dict]:
-        params: dict[str, Any] = {"format": "json", "per_page": self._per_page, "page": 1}
+        params: dict[str, Any] = {
+            "format": "json",
+            "per_page": self._per_page,
+            "page": 1,
+            **self._extra_params(),
+        }
         if mrv is not None:
             params["mrv"] = mrv
-        elif start_year is not None and end_year is not None:
-            params["date"] = f"{start_year}:{end_year}"
+        elif date_range is not None:
+            params["date"] = date_range
         url = f"{self.base_url}/country/{countries_param}/indicator/{code}"
 
-        first = await self._get_json(client, url, params)
+        first = await get_json(client, url, source=self.source_name, params=params)
         rows, pages = self._extract(first, code, url)
         for page in range(2, pages + 1):
-            payload = await self._get_json(client, url, {**params, "page": page})
+            payload = await get_json(
+                client, url, source=self.source_name, params={**params, "page": page}
+            )
             page_rows, _ = self._extract(payload, code, url)
             rows.extend(page_rows)
         return rows
@@ -156,32 +164,6 @@ class WorldBankConnector(BaseDataSourceConnector):
             self._indicator_names[code] = data[0].get("indicator", {}).get("value", code)
         pages = int(meta.get("pages", 1) or 1)
         return data, pages
-
-    async def _get_json(self, client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Any:
-        """GET with exponential backoff on transport errors, 429s, and 5xx."""
-        delay = _INITIAL_BACKOFF_S
-        last_error: Exception | None = None
-        for attempt in range(1, _RETRYABLE_ATTEMPTS + 1):
-            try:
-                resp = await client.get(url, params=params)
-            except httpx.HTTPError as exc:
-                last_error = exc
-            else:
-                if resp.status_code == 429 or resp.status_code >= 500:
-                    last_error = WorldBankAPIError(f"HTTP {resp.status_code} for {resp.url}")
-                else:
-                    resp.raise_for_status()
-                    return resp.json()
-            if attempt < _RETRYABLE_ATTEMPTS:
-                logger.warning(
-                    "[world_bank] retry %d/%d after error: %s",
-                    attempt,
-                    _RETRYABLE_ATTEMPTS,
-                    last_error,
-                )
-                await asyncio.sleep(delay)
-                delay *= 2
-        raise WorldBankAPIError(f"World Bank request failed after retries: {url}") from last_error
 
     # ── normalize ────────────────────────────────────────────
 

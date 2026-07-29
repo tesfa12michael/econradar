@@ -94,10 +94,31 @@ class Settings(BaseSettings):
     world_bank_refresh_cron_hour: int = 4
     focus_countries: tuple[str, ...] = Field(default=DEFAULT_FOCUS_COUNTRIES)
     world_bank_indicators: tuple[str, ...] = Field(default=DEFAULT_WORLD_BANK_INDICATORS)
+    imf_indicators: tuple[str, ...] = Field(default=())
+
+    # World Bank ingestion scope. "all" pulls every country the API knows, which is what
+    # the world map needs to look complete; aggregates and regions come back too and are
+    # rejected by the ISO-3 check. Set to "focus" to fall back to focus_countries.
+    world_bank_country_scope: str = "all"
+
+    # ── Anomaly detection (feature 1.8) ──
+    # Threshold is configurable, not hardcoded — an acceptance criterion.
+    anomaly_z_threshold: float = 2.0
+    anomaly_window: int = 12
+    # A rolling Z-score needs enough history to mean anything; below this a series is
+    # left unflagged rather than flagged on noise.
+    anomaly_min_observations: int = 8
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def world_bank_countries(self) -> list[str] | str:
+        """Country selector passed to the World Bank connectors."""
+        if self.world_bank_country_scope.strip().lower() == "all":
+            return "all"
+        return list(self.focus_countries)
 
 
 @lru_cache
