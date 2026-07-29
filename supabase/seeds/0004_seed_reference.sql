@@ -5,12 +5,15 @@
 -- but inactive until their connectors land in Phase 2.
 -- ─────────────────────────────────────────────────────────────
 
+-- Base URLs verified against the live APIs on 2026-07-29 (see docs/architecture.md
+-- decisions #15-#17). Note in particular that IMF is the DataMapper REST/JSON API,
+-- NOT SDMX: the SDMX endpoints return 501 "Data Queries are not implemented".
 insert into data_sources (name, base_url, is_active) values
-    ('world_bank',  'https://api.worldbank.org/v2',                       true),
-    ('imf',         'https://sdmxcentral.imf.org/ws/public/sdmxapi/rest', false),
-    ('fred',        'https://api.stlouisfed.org/fred',                    false),
-    ('bis',         'https://stats.bis.org/api/v2',                       false),
-    ('wb_databank', 'https://api.worldbank.org/v2',                       false)
+    ('world_bank',  'https://api.worldbank.org/v2',                        true),
+    ('imf',         'https://www.imf.org/external/datamapper/api/v1',      false),
+    ('fred',        'https://api.stlouisfed.org/fred',                     false),
+    ('bis',         'https://stats.bis.org/api/v2',                        false),
+    ('wb_databank', 'https://api.worldbank.org/v2',                        false)
 on conflict (name) do update
     set base_url = excluded.base_url;
 
