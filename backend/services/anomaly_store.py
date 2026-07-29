@@ -6,16 +6,17 @@ without a database, while all SQL lives here.
 
 from __future__ import annotations
 
+import datetime as dt
 import uuid
 from collections import defaultdict
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from logging_config import get_logger
 from models import Anomaly as AnomalyRow
-from models import DataSource, TimeSeries
+from models import DataSource, IndicatorCatalog, TimeSeries
 from services.anomaly import Observation, detect
 
 logger = get_logger(__name__)
@@ -66,11 +67,23 @@ async def refresh_anomalies(
     *,
     source_name: str | None = None,
 ) -> dict[str, int]:
-    """Re-score every series (optionally just one source's) and upsert the anomalies.
+    """Re-score every series (optionally just one source's) and replace its anomalies.
+
+    Re-scoring must be able to *retract*, not only add. Upserting alone leaves behind
+    every flag a previous algorithm or threshold produced — switching the detector to
+    trend residuals left ~9.6k stale anomalies in place, which the map and profile pages
+    would keep presenting as current findings.
+
+    Retraction is done by timestamp rather than by diffing ~24k keys: the upsert stamps
+    every re-confirmed row with the run's clock, so anything in scope still carrying an
+    older `detected_at` was not re-detected. That also preserves `llm_explanation` on
+    surviving rows, which a delete-then-reinsert would discard (feature 2.3 writes there).
 
     Returns a small JSON-friendly summary so scheduled job history stays legible.
     """
     async with session_factory() as session:
+        # The database's clock, so the comparison cannot skew against a client's.
+        started_at = (await session.execute(select(func.now()))).scalar_one()
         grouped = await _load_all_series(session, source_name)
 
         payload: list[dict] = []
@@ -101,15 +114,40 @@ async def refresh_anomalies(
                     },
                 )
             )
+
+        retracted = await _retract_stale(session, source_name, started_at)
         await session.commit()
 
     logger.info(
-        "anomaly refresh complete: series=%d anomalies=%d source=%s",
+        "anomaly refresh complete: series=%d anomalies=%d retracted=%d source=%s",
         len(grouped),
         len(payload),
+        retracted,
         source_name or "all",
     )
-    return {"series_scanned": len(grouped), "anomalies": len(payload)}
+    return {
+        "series_scanned": len(grouped),
+        "anomalies": len(payload),
+        "retracted": retracted,
+    }
+
+
+async def _retract_stale(
+    session: AsyncSession, source_name: str | None, started_at: dt.datetime
+) -> int:
+    """Delete in-scope anomalies that this run did not re-detect. Returns the count."""
+    stmt = delete(AnomalyRow).where(AnomalyRow.detected_at < started_at)
+    if source_name:
+        # indicators_catalog rows belong to exactly one source, so scoping by
+        # indicator_id keeps a per-source refresh from retracting another source's flags.
+        stmt = stmt.where(
+            AnomalyRow.indicator_id.in_(
+                select(IndicatorCatalog.id)
+                .join(DataSource, IndicatorCatalog.source_id == DataSource.id)
+                .where(DataSource.name == source_name)
+            )
+        )
+    return (await session.execute(stmt)).rowcount or 0
 
 
 async def count_anomalies(session: AsyncSession) -> int:
