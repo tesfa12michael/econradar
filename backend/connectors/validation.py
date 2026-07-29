@@ -64,8 +64,12 @@ _BOUNDS: Final[dict[ValueKind, Bounds]] = {
     ValueKind.PERCENT_CHANGE: Bounds(-100.0, 1e7, "a percent change outside -100%..1e7%"),
     # Small open economies run trade well above 100 % of GDP; 1000 is still absurd.
     ValueKind.PERCENT_SHARE: Bounds(-1_000.0, 1_000.0, "a percent-of-total outside -1000%..1000%"),
-    # Negative policy rates exist; hyperinflationary rates reach the hundreds.
-    ValueKind.RATE: Bounds(-50.0, 1_000.0, "an interest rate outside -50%..1000%"),
+    # Negative policy rates exist (SNB, ECB). The ceiling has to clear hyperinflation-era
+    # overnight rates, which genuinely reached five figures: BIS carries Brazilian and
+    # Turkish policy rates above 15,000% from the early 1990s. An earlier 1000% ceiling
+    # rejected 61 real observations — precisely the second-guessing this module warns
+    # against — so the bound now only excludes the arithmetically absurd.
+    ValueKind.RATE: Bounds(-50.0, 1e6, "an interest rate outside -50%..1e6%"),
     ValueKind.INDEX: Bounds(0.0, 1e12, "a negative or absurdly large index level"),
     ValueKind.CURRENCY: Bounds(-1e15, 1e15, "a currency amount beyond +/-1e15"),
     ValueKind.COUNT: Bounds(0.0, 1e12, "a negative or absurdly large count"),

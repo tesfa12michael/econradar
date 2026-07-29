@@ -95,6 +95,9 @@ def test_real_economic_extremes_survive() -> None:
     check_value(203.0, ValueKind.PERCENT_SHARE)  # Luxembourg exports, % of GDP
     check_value(-0.75, ValueKind.RATE)  # negative policy rate (SNB)
     check_value(-23.4, ValueKind.PERCENT_CHANGE)  # Sudan real GDP growth, 2024
+    # Real BIS observations that an earlier, tighter rate ceiling wrongly rejected.
+    check_value(15_405.6, ValueKind.RATE)  # hyperinflation-era overnight policy rate
+    check_value(2_741.2, ValueKind.RATE)
 
 
 # ── dates ────────────────────────────────────────────────────

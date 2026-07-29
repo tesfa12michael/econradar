@@ -86,6 +86,55 @@ class IndicatorSummaryOut(BaseModel):
     latest_value: float | None = None
 
 
+class AnomalyOut(BaseModel):
+    """A statistically flagged observation. Magnitude and timing only — the grounded
+    narrative explanation arrives in Phase 3 (feature 2.3)."""
+
+    country_code: str
+    country_name: str | None = None
+    indicator_code: str
+    indicator_name: str | None = None
+    date: dt.date
+    value: float | None = None
+    z_score: float | None = None
+    deviation_type: str | None = None  # spike | drop
+    detected_at: dt.datetime | None = None
+
+
+class MapPointOut(BaseModel):
+    """One country's latest value for a chosen indicator, for the choropleth.
+
+    `value` is None for a country with no data — the map must render that distinctly
+    rather than as a false zero (features.md 1.6).
+    """
+
+    country_code: str
+    country_name: str | None = None
+    value: float | None = None
+    date: dt.date | None = None
+    has_anomaly: bool = False
+
+
+class MapDataOut(BaseModel):
+    indicator_code: str
+    indicator_name: str | None = None
+    unit: str | None = None
+    source: str | None = None
+    points: list[MapPointOut]
+
+
+class IndicatorOptionOut(BaseModel):
+    """A selectable indicator for the map/profile pickers."""
+
+    indicator_code: str
+    indicator_name: str
+    category: str | None = None
+    unit: str | None = None
+    frequency: str | None = None
+    source: str
+    country_count: int = 0
+
+
 class HealthOut(BaseModel):
     status: str
     environment: str
@@ -107,5 +156,7 @@ class StatusOut(BaseModel):
     environment: str
     countries_tracked: int
     indicators_tracked: int
+    observations_tracked: int = 0
+    anomalies_flagged: int = 0
     sources: list[SourceStatusOut]
     groundedness_verification: str = "active"

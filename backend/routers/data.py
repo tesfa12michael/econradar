@@ -11,7 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 import repositories
 from db import get_session
-from schemas import CountryOut, IndicatorSeriesOut, IndicatorSummaryOut, SourceStatusOut
+from schemas import (
+    AnomalyOut,
+    CountryOut,
+    IndicatorOptionOut,
+    IndicatorSeriesOut,
+    IndicatorSummaryOut,
+    MapDataOut,
+    SourceStatusOut,
+)
 
 router = APIRouter(tags=["data"])
 
@@ -36,6 +44,42 @@ async def get_countries(
 @router.get("/sources", response_model=list[SourceStatusOut])
 async def get_sources(session: AsyncSession = Depends(get_session)) -> list[SourceStatusOut]:
     return await repositories.list_sources(session)
+
+
+@router.get("/indicators", response_model=list[IndicatorOptionOut])
+async def get_indicator_options(
+    session: AsyncSession = Depends(get_session),
+) -> list[IndicatorOptionOut]:
+    """Every indicator that has data, ordered by how many countries it covers."""
+    return await repositories.list_indicator_options(session)
+
+
+@router.get("/map", response_model=MapDataOut)
+async def get_map(
+    indicator: str = Query(description="Indicator code to shade the choropleth by"),
+    session: AsyncSession = Depends(get_session),
+) -> MapDataOut:
+    """Latest value per country for one indicator, with anomaly flags."""
+    data = await repositories.get_map_data(session, indicator.strip())
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"No data for indicator {indicator!r}.")
+    return data
+
+
+@router.get("/anomalies", response_model=list[AnomalyOut])
+async def get_anomalies(
+    country: str | None = Query(default=None, description="Filter by ISO-3 country code"),
+    indicator: str | None = Query(default=None, description="Filter by indicator code"),
+    limit: int = Query(default=100, ge=1, le=500),
+    session: AsyncSession = Depends(get_session),
+) -> list[AnomalyOut]:
+    """Statistically flagged observations — magnitude and timing only (no LLM text)."""
+    return await repositories.list_anomalies(
+        session,
+        country_code=_iso3(country) if country else None,
+        indicator_code=indicator.strip() if indicator else None,
+        limit=limit,
+    )
 
 
 @router.get(

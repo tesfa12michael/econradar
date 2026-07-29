@@ -83,6 +83,20 @@ class BaseDataSourceConnector(ABC):
         self._session_factory = session_factory
         # code -> human-readable name, populated during fetch/normalize for catalog upsert.
         self._indicator_names: dict[str, str] = {}
+        # Partial fetch failures (e.g. one indicator of eight). Drained by run() into
+        # etl_errors so a partial fetch is visible rather than looking like thin data.
+        self._fetch_errors: list[_RejectedRecord] = []
+
+    def record_fetch_error(self, context: str, exc: Exception) -> None:
+        """Note that part of a fetch failed without abandoning the rest of it.
+
+        Losing one indicator should degrade a run to "partial", not discard the seven
+        that succeeded — but it must never pass silently as a short result either.
+        """
+        logger.warning("[%s] partial fetch failure (%s): %s", self.source_name, context, exc)
+        self._fetch_errors.append(
+            _RejectedRecord({"fetch_context": context}, type(exc).__name__, str(exc))
+        )
 
     # ── provider-specific, DB-free (implement in subclasses) ──
 
@@ -163,11 +177,14 @@ class BaseDataSourceConnector(ABC):
 
         fetched = 0
         rejected: list[_RejectedRecord] = []
+        self._fetch_errors = []
 
         try:
             raw_records = await self.fetch(**fetch_kwargs)
             fetched = len(raw_records)
             good, rejected, skipped = self.process(raw_records)
+            # Partial fetch failures count as errors too, so status reflects them.
+            rejected = [*self._fetch_errors, *rejected]
             inserted = await self._persist(factory, good)
             await self._log_errors(factory, run_id, rejected)
             status = self._status(fetched, inserted, len(rejected))

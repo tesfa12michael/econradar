@@ -7,11 +7,15 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from models import CountryProfile, DataSource, IndicatorCatalog, TimeSeries
+from models import Anomaly, CountryProfile, DataSource, IndicatorCatalog, TimeSeries
 from schemas import (
+    AnomalyOut,
     CountryOut,
+    IndicatorOptionOut,
     IndicatorSeriesOut,
     IndicatorSummaryOut,
+    MapDataOut,
+    MapPointOut,
     ObservationOut,
     SourceStatusOut,
 )
@@ -31,6 +35,14 @@ async def count_countries(session: AsyncSession) -> int:
 
 async def count_indicators(session: AsyncSession) -> int:
     return (await session.execute(select(func.count()).select_from(IndicatorCatalog))).scalar_one()
+
+
+async def count_observations(session: AsyncSession) -> int:
+    return (await session.execute(select(func.count()).select_from(TimeSeries))).scalar_one()
+
+
+async def count_anomalies(session: AsyncSession) -> int:
+    return (await session.execute(select(func.count()).select_from(Anomaly))).scalar_one()
 
 
 async def list_sources(session: AsyncSession) -> list[SourceStatusOut]:
@@ -88,6 +100,155 @@ async def get_indicator_series(
             for r in rows
         ],
     )
+
+
+async def list_indicator_options(session: AsyncSession) -> list[IndicatorOptionOut]:
+    """Indicators that actually have data, with how many countries each covers.
+
+    The map's indicator picker uses the country count to lead with the series that
+    will render a full choropleth rather than a nearly-empty one.
+    """
+    stmt = (
+        select(
+            IndicatorCatalog.indicator_code,
+            IndicatorCatalog.indicator_name,
+            IndicatorCatalog.category,
+            IndicatorCatalog.unit,
+            IndicatorCatalog.frequency,
+            DataSource.name.label("source"),
+            func.count(func.distinct(TimeSeries.country_code)).label("country_count"),
+        )
+        .join(TimeSeries, TimeSeries.indicator_id == IndicatorCatalog.id)
+        .join(DataSource, IndicatorCatalog.source_id == DataSource.id)
+        .group_by(
+            IndicatorCatalog.indicator_code,
+            IndicatorCatalog.indicator_name,
+            IndicatorCatalog.category,
+            IndicatorCatalog.unit,
+            IndicatorCatalog.frequency,
+            DataSource.name,
+        )
+        .order_by(func.count(func.distinct(TimeSeries.country_code)).desc())
+    )
+    return [
+        IndicatorOptionOut(
+            indicator_code=r.indicator_code,
+            indicator_name=r.indicator_name,
+            category=r.category,
+            unit=r.unit,
+            frequency=r.frequency,
+            source=r.source,
+            country_count=r.country_count,
+        )
+        for r in (await session.execute(stmt)).all()
+    ]
+
+
+async def get_map_data(session: AsyncSession, indicator_code: str) -> MapDataOut | None:
+    """Latest value per country for one indicator, plus whether it has an anomaly.
+
+    Countries with no data are simply absent here; the frontend renders them in the
+    no-data colour rather than as zero.
+    """
+    latest = (
+        select(
+            TimeSeries.country_code,
+            TimeSeries.date,
+            TimeSeries.value,
+            IndicatorCatalog.indicator_name,
+            IndicatorCatalog.unit,
+            DataSource.name.label("source"),
+        )
+        .join(IndicatorCatalog, TimeSeries.indicator_id == IndicatorCatalog.id)
+        .join(DataSource, TimeSeries.source_id == DataSource.id)
+        .where(IndicatorCatalog.indicator_code == indicator_code)
+        .where(TimeSeries.value.is_not(None))
+        .order_by(TimeSeries.country_code, TimeSeries.date.desc())
+        .distinct(TimeSeries.country_code)
+    )
+    rows = (await session.execute(latest)).all()
+    if not rows:
+        return None
+
+    flagged = {
+        code
+        for (code,) in (
+            await session.execute(
+                select(Anomaly.country_code)
+                .join(IndicatorCatalog, Anomaly.indicator_id == IndicatorCatalog.id)
+                .where(IndicatorCatalog.indicator_code == indicator_code)
+                .distinct()
+            )
+        ).all()
+    }
+
+    names = dict(
+        (await session.execute(select(CountryProfile.country_code, CountryProfile.country_name)))
+        .tuples()
+        .all()
+    )
+
+    first = rows[0]
+    return MapDataOut(
+        indicator_code=indicator_code,
+        indicator_name=first.indicator_name,
+        unit=first.unit,
+        source=first.source,
+        points=[
+            MapPointOut(
+                country_code=r.country_code,
+                country_name=names.get(r.country_code),
+                value=float(r.value),
+                date=r.date,
+                has_anomaly=r.country_code in flagged,
+            )
+            for r in rows
+        ],
+    )
+
+
+async def list_anomalies(
+    session: AsyncSession,
+    country_code: str | None = None,
+    indicator_code: str | None = None,
+    limit: int = 100,
+) -> list[AnomalyOut]:
+    stmt = (
+        select(
+            Anomaly.country_code,
+            Anomaly.date,
+            Anomaly.value,
+            Anomaly.z_score,
+            Anomaly.deviation_type,
+            Anomaly.detected_at,
+            IndicatorCatalog.indicator_code,
+            IndicatorCatalog.indicator_name,
+            CountryProfile.country_name,
+        )
+        .join(IndicatorCatalog, Anomaly.indicator_id == IndicatorCatalog.id)
+        .outerjoin(CountryProfile, CountryProfile.country_code == Anomaly.country_code)
+        .order_by(Anomaly.date.desc())
+        .limit(limit)
+    )
+    if country_code:
+        stmt = stmt.where(Anomaly.country_code == country_code)
+    if indicator_code:
+        stmt = stmt.where(IndicatorCatalog.indicator_code == indicator_code)
+
+    return [
+        AnomalyOut(
+            country_code=r.country_code,
+            country_name=r.country_name,
+            indicator_code=r.indicator_code,
+            indicator_name=r.indicator_name,
+            date=r.date,
+            value=float(r.value) if r.value is not None else None,
+            z_score=float(r.z_score) if r.z_score is not None else None,
+            deviation_type=r.deviation_type,
+            detected_at=r.detected_at,
+        )
+        for r in (await session.execute(stmt)).all()
+    ]
 
 
 async def list_country_indicators(

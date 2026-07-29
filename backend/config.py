@@ -101,6 +101,11 @@ class Settings(BaseSettings):
     # rejected by the ISO-3 check. Set to "focus" to fall back to focus_countries.
     world_bank_country_scope: str = "all"
 
+    # Global Economic Monitor is monthly only when given an explicit range in the World
+    # Bank's own YYYYMnn spelling; without one it silently returns annual aggregates.
+    gem_start_period: str = "2015M01"
+    gem_end_period: str = "2026M12"
+
     # ── Anomaly detection (feature 1.8) ──
     # Threshold is configurable, not hardcoded — an acceptance criterion.
     anomaly_z_threshold: float = 2.0

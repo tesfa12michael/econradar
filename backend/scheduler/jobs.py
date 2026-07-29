@@ -1,37 +1,96 @@
-"""Scheduled job callables.
+"""Scheduled job callables (feature 2.4).
 
 These MUST be module-level, importable functions: the SQLAlchemyJobStore persists
 a job by its ``module:qualname`` reference, so a closure or a bound method would not
 survive a restart.
+
+Every job follows the same shape — ingest one source, then re-score that source's
+series for anomalies (feature 1.8's "detected automatically as new data is ingested").
+A source being unreachable must never crash the scheduler, so each job catches and
+reports rather than propagating; APScheduler would otherwise keep firing into an
+error and the run history would lose the detail of what actually failed.
 """
 
 from __future__ import annotations
 
-from connectors import WorldBankConnector
+from typing import Any
+
+from config import settings
+from connectors import (
+    BISConnector,
+    FREDConnector,
+    IMFConnector,
+    WBDataBankConnector,
+    WorldBankConnector,
+)
+from connectors.base import BaseDataSourceConnector
+from db import get_session_factory
 from logging_config import get_logger
+from services import refresh_anomalies
 
 logger = get_logger(__name__)
 
 
-async def run_world_bank_refresh() -> dict:
-    """Ingest the configured World Bank indicators for the focus countries.
+async def _ingest(
+    connector: BaseDataSourceConnector, *, detect_anomalies: bool = True, **fetch_kwargs: Any
+) -> dict:
+    """Run one connector, then refresh anomalies for the source it just loaded."""
+    source = connector.source_name
+    try:
+        result = await connector.run(**fetch_kwargs)
+    except Exception as exc:
+        # An unreachable source degrades one job, not the scheduler.
+        logger.exception("[%s] scheduled ingestion failed", source)
+        return {"source": source, "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
 
-    Returns a small dict (JSON-friendly) so job execution history is legible.
-    """
-    connector = WorldBankConnector()
-    result = await connector.run()
-    logger.info(
-        "world_bank_refresh complete: status=%s fetched=%d inserted=%d failed=%d skipped=%d",
-        result.status,
-        result.records_fetched,
-        result.records_inserted,
-        result.records_failed,
-        result.records_skipped,
-    )
-    return {
+    summary = {
+        "source": source,
         "status": result.status,
         "fetched": result.records_fetched,
         "inserted": result.records_inserted,
         "failed": result.records_failed,
         "skipped": result.records_skipped,
     }
+
+    if detect_anomalies and result.records_inserted:
+        try:
+            summary["anomalies"] = await refresh_anomalies(
+                get_session_factory(), source_name=source
+            )
+        except Exception as exc:
+            # Ingestion succeeded; losing the anomaly pass must not mark it failed.
+            logger.exception("[%s] anomaly refresh failed after ingestion", source)
+            summary["anomaly_error"] = f"{type(exc).__name__}: {exc}"
+
+    logger.info("[%s] scheduled refresh complete: %s", source, summary)
+    return summary
+
+
+async def run_world_bank_refresh() -> dict:
+    """World Bank WDI — weekly. Annual data, revised on a slow cadence."""
+    return await _ingest(WorldBankConnector(), countries=settings.world_bank_countries)
+
+
+async def run_imf_refresh() -> dict:
+    """IMF WEO — weekly. Published twice yearly, so weekly is ample."""
+    return await _ingest(IMFConnector())
+
+
+async def run_fred_refresh() -> dict:
+    """FRED — daily. Highest-frequency source; no-ops cleanly without an API key."""
+    return await _ingest(FREDConnector())
+
+
+async def run_bis_refresh() -> dict:
+    """BIS policy rates — monthly, matching the publication frequency."""
+    return await _ingest(BISConnector())
+
+
+async def run_wb_databank_refresh() -> dict:
+    """World Bank Global Economic Monitor — monthly."""
+    return await _ingest(
+        WBDataBankConnector(),
+        countries=settings.world_bank_countries,
+        start_period=settings.gem_start_period,
+        end_period=settings.gem_end_period,
+    )

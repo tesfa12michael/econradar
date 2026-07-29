@@ -39,6 +39,8 @@ async def status(session: AsyncSession = Depends(get_session)) -> StatusOut:
     try:
         countries = await repositories.count_countries(session)
         indicators = await repositories.count_indicators(session)
+        observations = await repositories.count_observations(session)
+        anomalies = await repositories.count_anomalies(session)
         sources = await repositories.list_sources(session)
         overall = "operational"
     except Exception as exc:
@@ -55,5 +57,7 @@ async def status(session: AsyncSession = Depends(get_session)) -> StatusOut:
         environment=settings.environment,
         countries_tracked=countries,
         indicators_tracked=indicators,
+        observations_tracked=observations,
+        anomalies_flagged=anomalies,
         sources=sources,
     )

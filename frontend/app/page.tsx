@@ -1,99 +1,165 @@
-import { apiUrl, type HealthResponse } from '@/lib/api';
+import { Suspense } from 'react';
 
-// Render at request time so the live backend check never runs during `next build`.
-export const dynamic = 'force-dynamic';
+import { IndicatorSelector } from '@/components/IndicatorSelector';
+import { WorldMap } from '@/components/WorldMap';
+import { AnomalyBadge, Card, CountryLink, EmptyState, PanelHeading, Skeleton, SourceChip } from '@/components/ui';
+import {
+  fetchJson,
+  formatValue,
+  type AnomalyRecord,
+  type IndicatorOption,
+  type MapData,
+} from '@/lib/api';
 
-async function fetchHealth(): Promise<HealthResponse | null> {
-  try {
-    const res = await fetch(apiUrl('/health'), { cache: 'no-store' });
-    if (!res.ok) return null;
-    return (await res.json()) as HealthResponse;
-  } catch {
-    return null;
-  }
+export const revalidate = 300;
+
+const FALLBACK_INDICATOR = 'NY.GDP.MKTP.KD.ZG';
+
+interface PageProps {
+  searchParams: Promise<{ indicator?: string }>;
 }
 
-function Row({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+export default async function Home({ searchParams }: PageProps) {
+  const { indicator } = await searchParams;
+
+  const options = (await fetchJson<IndicatorOption[]>('/api/v1/indicators')) ?? [];
+  // Default to the indicator with the widest country coverage, so the first thing a
+  // visitor sees is a full map rather than a sparse one.
+  const selected = indicator ?? options[0]?.indicator_code ?? FALLBACK_INDICATOR;
+
+  const [map, anomalies] = await Promise.all([
+    fetchJson<MapData>(`/api/v1/map?indicator=${encodeURIComponent(selected)}`),
+    fetchJson<AnomalyRecord[]>('/api/v1/anomalies?limit=8'),
+  ]);
+
+  const withData = map?.points.filter((p) => p.value !== null) ?? [];
+  const sorted = [...withData].sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+  const average =
+    withData.length > 0
+      ? withData.reduce((sum, p) => sum + (p.value ?? 0), 0) / withData.length
+      : null;
+
   return (
-    <div
-      style={{ borderColor: 'var(--border)' }}
-      className="flex items-center justify-between border-b py-2 last:border-b-0"
-    >
-      <span style={{ color: 'var(--text-secondary)' }} className="text-sm">
-        {label}
-      </span>
-      <span
-        style={{
-          color: accent ? 'var(--accent)' : 'var(--text-primary)',
-          fontFamily: 'var(--font-mono)',
-        }}
-        className="text-sm"
+    <main className="flex min-h-screen flex-col">
+      <header
+        className="flex flex-wrap items-center justify-between gap-4 border-b px-6 py-4"
+        style={{ borderColor: 'var(--border)' }}
       >
-        {value}
-      </span>
-    </div>
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">EconRadar</h1>
+          <span
+            style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}
+            className="text-[10px] uppercase tracking-[0.25em]"
+          >
+            Phase 2
+          </span>
+        </div>
+        {options.length > 0 && (
+          <Suspense fallback={<Skeleton className="h-9 w-72" />}>
+            <IndicatorSelector options={options} selected={selected} />
+          </Suspense>
+        )}
+      </header>
+
+      {map ? (
+        <WorldMap
+          points={map.points}
+          indicatorCode={selected}
+          indicatorName={map.indicator_name}
+          unit={map.unit}
+        />
+      ) : (
+        <div className="flex h-[60vh] items-center justify-center" style={{ background: 'var(--bg-card)' }}>
+          <EmptyState
+            title="Map data unavailable"
+            hint="The backend did not return data for this indicator. It may not have been ingested yet."
+          />
+        </div>
+      )}
+
+      <div className="grid flex-1 gap-5 p-6 lg:grid-cols-[1fr_1.2fr]">
+        <Card>
+          <PanelHeading>Recent anomalies</PanelHeading>
+          {anomalies && anomalies.length > 0 ? (
+            <ul className="flex flex-col gap-3">
+              {anomalies.map((a) => (
+                <li
+                  key={`${a.country_code}-${a.indicator_code}-${a.date}`}
+                  className="flex flex-wrap items-center justify-between gap-2 border-b pb-2 last:border-b-0"
+                  style={{ borderColor: 'var(--border)' }}
+                >
+                  <div className="min-w-0">
+                    <CountryLink code={a.country_code} name={a.country_name} />
+                    <span style={{ color: 'var(--text-tertiary)' }} className="ml-2 text-xs">
+                      {a.indicator_name ?? a.indicator_code} · {a.date.slice(0, 7)}
+                    </span>
+                  </div>
+                  <AnomalyBadge deviationType={a.deviation_type} zScore={a.z_score} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState
+              title="No anomalies flagged yet"
+              hint="Anomalies are detected automatically after each scheduled ingestion."
+            />
+          )}
+        </Card>
+
+        <Card>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <PanelHeading>{map?.indicator_name ?? 'Global statistics'}</PanelHeading>
+            <SourceChip source={map?.source} />
+          </div>
+          {withData.length > 0 ? (
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <Stat label="Countries" value={String(withData.length)} />
+              <Stat label="World average" value={formatValue(average, map?.unit)} />
+              <Stat
+                label="Highest"
+                value={formatValue(sorted[0]?.value, map?.unit)}
+                caption={sorted[0]?.country_name ?? undefined}
+              />
+              <Stat
+                label="Lowest"
+                value={formatValue(sorted[sorted.length - 1]?.value, map?.unit)}
+                caption={sorted[sorted.length - 1]?.country_name ?? undefined}
+              />
+            </dl>
+          ) : (
+            <EmptyState title="No values for this indicator yet" />
+          )}
+        </Card>
+      </div>
+
+      <footer
+        className="border-t px-6 py-4 text-xs"
+        style={{ borderColor: 'var(--border)', color: 'var(--text-tertiary)' }}
+      >
+        Data: World Bank · IMF · FRED · BIS · WB DataBank. Forecasting, LLM narration and
+        RAG Q&amp;A arrive in Phase 3.
+      </footer>
+    </main>
   );
 }
 
-export default async function Home() {
-  const health = await fetchHealth();
-  const online = health?.status === 'ok';
-
+function Stat({ label, value, caption }: { label: string; value: string; caption?: string }) {
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-10 px-6 py-16">
-      <header className="flex flex-col gap-4">
-        <span
-          style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}
-          className="text-xs uppercase tracking-[0.3em]"
-        >
-          Phase 1 · Foundation
-        </span>
-        <h1 className="text-5xl font-bold tracking-tight">EconRadar</h1>
-        <p style={{ color: 'var(--text-secondary)' }} className="max-w-xl text-lg leading-relaxed">
-          AI-native economic intelligence — live World Bank, IMF, FRED &amp; BIS data with zero-shot
-          forecasting, LLM narration, VLM chart interpretation, and RAG Q&amp;A. Free and open source.
-        </p>
-      </header>
-
-      <section
-        style={{ background: 'var(--bg-card)', borderColor: 'var(--border)' }}
-        className="rounded-xl border p-6"
+    <div>
+      <dt style={{ color: 'var(--text-secondary)' }} className="text-sm">
+        {label}
+      </dt>
+      <dd
+        style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}
+        className="text-lg font-semibold"
       >
-        <div className="mb-4 flex items-center gap-3">
-          <span
-            aria-hidden
-            style={{ background: online ? 'var(--positive)' : 'var(--negative)' }}
-            className="inline-block h-2.5 w-2.5 rounded-full"
-          />
-          <h2 className="text-xl font-semibold">
-            Backend status:{' '}
-            <span style={{ color: online ? 'var(--positive)' : 'var(--negative)' }}>
-              {online ? 'online' : 'unreachable'}
-            </span>
-          </h2>
-        </div>
-
-        {health ? (
-          <div>
-            <Row label="API version" value={health.version} accent />
-            <Row label="Environment" value={health.environment} />
-            <Row label="Database" value={health.database} />
-            <Row label="Scheduler" value={health.scheduler} />
-          </div>
-        ) : (
-          <p style={{ color: 'var(--text-tertiary)' }} className="text-sm leading-relaxed">
-            No response from{' '}
-            <code style={{ color: 'var(--text-secondary)' }}>{apiUrl('/health')}</code>. Set{' '}
-            <code style={{ color: 'var(--text-secondary)' }}>NEXT_PUBLIC_API_URL</code> and make sure
-            the FastAPI backend is running.
-          </p>
-        )}
-      </section>
-
-      <footer style={{ color: 'var(--text-tertiary)' }} className="text-xs">
-        End-to-end skeleton: Vercel → Render → Supabase. The interactive world map, country profiles,
-        and RAG chat arrive in Phase 2.
-      </footer>
-    </main>
+        {value}
+      </dd>
+      {caption && (
+        <p style={{ color: 'var(--text-tertiary)' }} className="truncate text-xs">
+          {caption}
+        </p>
+      )}
+    </div>
   );
 }

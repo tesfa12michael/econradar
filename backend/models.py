@@ -102,6 +102,28 @@ class TimeSeries(Base):
     ingested_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), **_NOW)
 
 
+class Anomaly(Base):
+    __tablename__ = "anomalies"
+    # Detection re-runs after every ingestion, so re-scoring a point must update its
+    # row rather than append (see supabase/migrations/0006_anomalies_unique.sql).
+    __table_args__ = (
+        UniqueConstraint("country_code", "indicator_id", "date", name="anomalies_natural_key"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, **_UUID_PK)
+    country_code: Mapped[str] = mapped_column(String(3))
+    indicator_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("indicators_catalog.id", ondelete="CASCADE")
+    )
+    date: Mapped[dt.date] = mapped_column(Date)
+    value: Mapped[float | None] = mapped_column(Numeric)
+    z_score: Mapped[float | None] = mapped_column(Numeric)
+    deviation_type: Mapped[str | None] = mapped_column(Text)
+    # Populated in Phase 3 by feature 2.3 — never written by the statistical detector.
+    llm_explanation: Mapped[str | None] = mapped_column(Text)
+    detected_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), **_NOW)
+
+
 class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
 

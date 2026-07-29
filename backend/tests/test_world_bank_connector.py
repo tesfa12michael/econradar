@@ -87,6 +87,33 @@ def test_normalize_aggregate_row_still_rejected() -> None:
         c.normalize(_row(countryiso3code="", country={"id": "ZJ", "value": "Latin America"}))
 
 
+@pytest.mark.parametrize("code", ["ARB", "EMU", "WLD", "SSF", "LMY"])
+def test_three_letter_aggregates_are_skipped(code: str) -> None:
+    """ARB/EMU/WLD are well-formed ISO-3 *shapes* but are not countries.
+
+    Storing them silently corrupts every world average on the dashboard, so the
+    connector filters against the World Bank's own country index instead of a
+    shape check. Regression guard for the rows purged by migration 0007.
+    """
+    c = WorldBankConnector()
+    c._known_countries = {"NGA", "USA"}
+    with pytest.raises(SkipRecord):
+        c.normalize(_row(countryiso3code=code))
+
+
+def test_real_country_passes_the_index_check() -> None:
+    c = WorldBankConnector()
+    c._known_countries = {"NGA", "USA"}
+    assert c.normalize(_row(countryiso3code="NGA")).country_code == "NGA"
+
+
+def test_index_check_is_skipped_when_the_index_is_unavailable() -> None:
+    """Degraded path: without the index, a shape check is better than rejecting all."""
+    c = WorldBankConnector()
+    assert c._known_countries == set()
+    assert c.normalize(_row(countryiso3code="ARB")).country_code == "ARB"
+
+
 def test_validate_flags_and_rejects_non_finite() -> None:
     c = WorldBankConnector()
     good = TimeSeriesRecord(
