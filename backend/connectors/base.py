@@ -12,8 +12,6 @@ Design goals:
 
 from __future__ import annotations
 
-import datetime as dt
-import math
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -24,6 +22,12 @@ from sqlalchemy import text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from connectors.validation import (
+    DuplicateRecord,
+    ValidationError,
+    ValueKind,
+    validate_record,
+)
 from db import get_session_factory
 from logging_config import get_logger
 from models import DataSource, EtlError, IndicatorCatalog, PipelineRun, TimeSeries
@@ -33,13 +37,18 @@ logger = get_logger(__name__)
 
 _UPSERT_CHUNK = 500
 
+__all__ = [
+    "BaseDataSourceConnector",
+    "DuplicateRecord",
+    "NormalizationError",
+    "PipelineRunResult",
+    "SkipRecord",
+    "ValidationError",
+]
+
 
 class NormalizationError(Exception):
     """A raw record could not be converted to a TimeSeriesRecord."""
-
-
-class ValidationError(Exception):
-    """A normalized record failed a validation rule."""
 
 
 class SkipRecord(Exception):
@@ -92,20 +101,57 @@ class BaseDataSourceConnector(ABC):
     def indicator_display_name(self, code: str) -> str:
         return self._indicator_names.get(code, code)
 
-    # ── shared validation ──
+    def value_kind(self, indicator_code: str) -> ValueKind | None:
+        """Semantic kind of an indicator's values, enabling plausibility bounds.
+
+        Returning None (the default) means "unknown units" — the record still gets the
+        universal finite/date checks, but no bounds are asserted. Subclasses override
+        this for indicators whose units they actually know; see connectors/validation.py
+        for why guessing here would be worse than not bounding at all.
+        """
+        return None
+
+    # ── shared validation (feature 1.2) ──
 
     def validate(self, record: TimeSeriesRecord) -> TimeSeriesRecord:
-        """Baseline validation (feature 1.2 hardens this in Phase 2). Raises ValidationError.
+        """Per-record rules. Raises ValidationError; the caller logs it to etl_errors."""
+        return validate_record(record, self.value_kind(record.indicator_code))
 
-        Null values never reach here — normalize() raises SkipRecord for them and
-        TimeSeriesRecord.value is a required float — so this guards the remaining
-        numeric hazards: NaN/inf and implausible future dates.
+    # ── batch processing (pure — no database, no network) ──
+
+    def process(
+        self, raw_records: Sequence[Any]
+    ) -> tuple[list[TimeSeriesRecord], list[_RejectedRecord], int]:
+        """Normalize + validate a raw batch into ``(accepted, rejected, skipped)``.
+
+        Deliberately DB-free so the whole accept/reject/skip decision surface — the part
+        that decides what silently disappears and what is logged — can be unit-tested
+        against fixtures without a database.
         """
-        if math.isnan(record.value) or math.isinf(record.value):
-            raise ValidationError(f"value is not finite: {record.value!r}")
-        if record.date.year > dt.date.today().year + 1:
-            raise ValidationError(f"date is implausibly far in the future: {record.date}")
-        return record.model_copy(update={"is_validated": True})
+        good: list[TimeSeriesRecord] = []
+        rejected: list[_RejectedRecord] = []
+        skipped = 0
+
+        # Natural keys already accepted this run. A provider paging bug or an
+        # overlapping re-run would otherwise collapse silently during upsert; here the
+        # second copy is rejected loudly and lands in etl_errors like any other reject.
+        seen: set[tuple[str, str, Any]] = set()
+
+        for raw in raw_records:
+            try:
+                record = self.validate(self.normalize(raw))
+                key = (record.country_code, record.indicator_code, record.date)
+                if key in seen:
+                    raise DuplicateRecord(f"duplicate observation for {key[0]}/{key[1]}/{key[2]}")
+                seen.add(key)
+            except SkipRecord:
+                skipped += 1
+            except (NormalizationError, ValidationError) as exc:
+                rejected.append(_RejectedRecord(raw, type(exc).__name__, str(exc)))
+            else:
+                good.append(record)
+
+        return good, rejected, skipped
 
     # ── orchestration (DB-backed) ──
 
@@ -116,23 +162,12 @@ class BaseDataSourceConnector(ABC):
         logger.info("[%s] pipeline run %s started", self.source_name, run_id)
 
         fetched = 0
-        good: list[TimeSeriesRecord] = []
         rejected: list[_RejectedRecord] = []
-        skipped = 0
 
         try:
             raw_records = await self.fetch(**fetch_kwargs)
             fetched = len(raw_records)
-            for raw in raw_records:
-                try:
-                    record = self.validate(self.normalize(raw))
-                except SkipRecord:
-                    skipped += 1
-                except (NormalizationError, ValidationError) as exc:
-                    rejected.append(_RejectedRecord(raw, type(exc).__name__, str(exc)))
-                else:
-                    good.append(record)
-
+            good, rejected, skipped = self.process(raw_records)
             inserted = await self._persist(factory, good)
             await self._log_errors(factory, run_id, rejected)
             status = self._status(fetched, inserted, len(rejected))
@@ -143,7 +178,7 @@ class BaseDataSourceConnector(ABC):
                 factory, run_id, [_RejectedRecord(None, type(exc).__name__, str(exc))]
             )
             await self._finish_run(factory, run_id, fetched, 0, len(rejected) + 1, "failed")
-            return PipelineRunResult(run_id, "failed", fetched, 0, len(rejected) + 1, skipped)
+            return PipelineRunResult(run_id, "failed", fetched, 0, len(rejected) + 1, 0)
 
         logger.info(
             "[%s] run %s done: status=%s fetched=%d inserted=%d failed=%d skipped=%d",
@@ -192,22 +227,38 @@ class BaseDataSourceConnector(ABC):
         return (await session.execute(stmt)).scalar_one()
 
     async def _ensure_indicators(
-        self, session: AsyncSession, source_id: uuid.UUID, codes: Sequence[str]
+        self, session: AsyncSession, source_id: uuid.UUID, records: Sequence[TimeSeriesRecord]
     ) -> dict[str, uuid.UUID]:
+        """Upsert the catalog rows for every indicator in this batch.
+
+        Unit and frequency are carried on the observations themselves, so the catalog
+        learns them from the data rather than needing a hand-maintained table per source.
+        COALESCE keeps a previously-known unit/frequency when a later batch omits it.
+        """
+        by_code: dict[str, TimeSeriesRecord] = {}
+        for record in records:  # first occurrence wins; preserves order
+            by_code.setdefault(record.indicator_code, record)
+
         rows = [
             {
                 "source_id": source_id,
                 "indicator_code": code,
                 "indicator_name": self.indicator_display_name(code),
+                "unit": sample.unit,
+                "frequency": sample.frequency,
             }
-            for code in dict.fromkeys(codes)  # de-dupe, preserve order
+            for code, sample in by_code.items()
         ]
         if not rows:
             return {}
         ins = pg_insert(IndicatorCatalog).values(rows)
         stmt = ins.on_conflict_do_update(
             index_elements=[IndicatorCatalog.source_id, IndicatorCatalog.indicator_code],
-            set_={"indicator_name": ins.excluded.indicator_name},
+            set_={
+                "indicator_name": ins.excluded.indicator_name,
+                "unit": text("coalesce(excluded.unit, indicators_catalog.unit)"),
+                "frequency": text("coalesce(excluded.frequency, indicators_catalog.frequency)"),
+            },
         ).returning(IndicatorCatalog.id, IndicatorCatalog.indicator_code)
         result = await session.execute(stmt)
         return {code: id_ for id_, code in result.all()}
@@ -219,9 +270,7 @@ class BaseDataSourceConnector(ABC):
             return 0
         async with factory() as session:
             source_id = await self._ensure_source(session)
-            id_by_code = await self._ensure_indicators(
-                session, source_id, [r.indicator_code for r in records]
-            )
+            id_by_code = await self._ensure_indicators(session, source_id, records)
             payload = [
                 {
                     "country_code": r.country_code,

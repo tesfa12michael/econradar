@@ -50,10 +50,41 @@ def test_normalize_aggregate_row_rejected() -> None:
         c.normalize(_row(countryiso3code=""))
 
 
-def test_normalize_subannual_date_rejected() -> None:
+def test_normalize_subannual_dates_supported() -> None:
+    """Phase 1 rejected sub-annual periods; Phase 2 parses them (BIS/FRED/GEM need it)."""
+    c = WorldBankConnector()
+
+    monthly = c.normalize(_row(date="2025M03"))
+    assert monthly.date == dt.date(2025, 3, 1)
+    assert monthly.frequency == "monthly"
+
+    quarterly = c.normalize(_row(date="2025Q4"))
+    assert quarterly.date == dt.date(2025, 10, 1)
+    assert quarterly.frequency == "quarterly"
+
+    annual = c.normalize(_row(date="2025"))
+    assert annual.date == dt.date(2025, 1, 1)
+    assert annual.frequency == "annual"
+
+
+def test_normalize_unparseable_date_rejected() -> None:
     c = WorldBankConnector()
     with pytest.raises(NormalizationError):
-        c.normalize(_row(date="2025M03"))
+        c.normalize(_row(date="not-a-date"))
+
+
+def test_normalize_falls_back_to_country_id() -> None:
+    """DataBank source=15 leaves countryiso3code empty and puts ISO-3 in country.id."""
+    c = WorldBankConnector()
+    rec = c.normalize(_row(countryiso3code="", country={"id": "NGA", "value": "Nigeria"}))
+    assert rec.country_code == "NGA"
+
+
+def test_normalize_aggregate_row_still_rejected() -> None:
+    """Neither field carries an ISO-3 code for regional aggregates."""
+    c = WorldBankConnector()
+    with pytest.raises(NormalizationError):
+        c.normalize(_row(countryiso3code="", country={"id": "ZJ", "value": "Latin America"}))
 
 
 def test_validate_flags_and_rejects_non_finite() -> None:

@@ -20,9 +20,10 @@ class TimeSeriesRecord(BaseModel):
     country_code: str  # ISO 3166-1 alpha-3
     indicator_code: str  # source-native code, e.g. FP.CPI.TOTL.ZG
     source_name: str  # data_sources.name, e.g. world_bank
-    date: dt.date
+    date: dt.date  # first day of the observation period (see connectors/dates.py)
     value: float
     unit: str | None = None
+    frequency: str | None = None  # annual | quarterly | monthly | daily
     is_validated: bool = False
 
     @field_validator("country_code")

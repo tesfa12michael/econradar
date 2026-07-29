@@ -15,7 +15,6 @@ deferred to Phase 2.
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 from typing import Any
 
 import httpx
@@ -24,6 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
 from connectors.base import BaseDataSourceConnector, NormalizationError, SkipRecord
+from connectors.dates import UnparseableDate, parse_period
+from connectors.validation import ValueKind
 from logging_config import get_logger
 from schemas import TimeSeriesRecord
 
@@ -31,6 +32,32 @@ logger = get_logger(__name__)
 
 _RETRYABLE_ATTEMPTS = 4
 _INITIAL_BACKOFF_S = 0.5
+
+#: The World Bank leaves `unit` blank on essentially every WDI row, so units for the
+#: curated indicator set are declared here and mirror supabase/seeds/0004.
+_UNITS: dict[str, str] = {
+    "NY.GDP.MKTP.KD.ZG": "%",
+    "FP.CPI.TOTL.ZG": "%",
+    "NY.GDP.PCAP.CD": "US$",
+    "SL.UEM.TOTL.ZS": "%",
+    "NE.EXP.GNFS.ZS": "%",
+    "NE.IMP.GNFS.ZS": "%",
+    "GC.DOD.TOTL.GD.ZS": "%",
+    "BN.CAB.XOKA.GD.ZS": "%",
+}
+
+#: Semantics for plausibility bounds (connectors/validation.py). Only the indicators
+#: whose units we actually know are listed; anything else is bound-free by design.
+_VALUE_KINDS: dict[str, ValueKind] = {
+    "NY.GDP.MKTP.KD.ZG": ValueKind.PERCENT_CHANGE,
+    "FP.CPI.TOTL.ZG": ValueKind.PERCENT_CHANGE,
+    "NY.GDP.PCAP.CD": ValueKind.CURRENCY,
+    "SL.UEM.TOTL.ZS": ValueKind.PERCENT_SHARE,
+    "NE.EXP.GNFS.ZS": ValueKind.PERCENT_SHARE,
+    "NE.IMP.GNFS.ZS": ValueKind.PERCENT_SHARE,
+    "GC.DOD.TOTL.GD.ZS": ValueKind.PERCENT_SHARE,
+    "BN.CAB.XOKA.GD.ZS": ValueKind.PERCENT_SHARE,
+}
 
 
 class WorldBankAPIError(Exception):
@@ -52,6 +79,9 @@ class WorldBankConnector(BaseDataSourceConnector):
         self._client = client
         self._per_page = per_page
         self._timeout = request_timeout
+
+    def value_kind(self, indicator_code: str) -> ValueKind | None:
+        return _VALUE_KINDS.get(indicator_code)
 
     # ── fetch ────────────────────────────────────────────────
 
@@ -156,10 +186,7 @@ class WorldBankConnector(BaseDataSourceConnector):
     # ── normalize ────────────────────────────────────────────
 
     def normalize(self, raw_record: dict) -> TimeSeriesRecord:
-        iso3 = (raw_record.get("countryiso3code") or "").strip()
-        if len(iso3) != 3 or not iso3.isalpha():
-            # Aggregate / regional rows (e.g. "Sub-Saharan Africa") have no ISO-3 code.
-            raise NormalizationError(f"non-ISO-3 country code: {iso3!r}")
+        iso3 = self._country_code(raw_record)
 
         indicator = raw_record.get("indicator") or {}
         code = indicator.get("id")
@@ -172,7 +199,11 @@ class WorldBankConnector(BaseDataSourceConnector):
         if value is None:
             raise SkipRecord(f"null value for {iso3}/{code}/{raw_record.get('date')}")
 
-        obs_date = self._parse_date(raw_record.get("date"))
+        try:
+            obs_date, frequency = parse_period(raw_record.get("date"))
+        except UnparseableDate as exc:
+            raise NormalizationError(str(exc)) from exc
+
         try:
             return TimeSeriesRecord(
                 country_code=iso3,
@@ -180,16 +211,24 @@ class WorldBankConnector(BaseDataSourceConnector):
                 source_name=self.source_name,
                 date=obs_date,
                 value=float(value),
-                unit=(raw_record.get("unit") or None),
+                unit=(raw_record.get("unit") or None) or _UNITS.get(code),
+                frequency=frequency,
             )
         except (PydanticValidationError, TypeError, ValueError) as exc:
             raise NormalizationError(f"could not build record: {exc}") from exc
 
     @staticmethod
-    def _parse_date(raw_date: Any) -> dt.date:
-        s = str(raw_date or "").strip()
-        if len(s) == 4 and s.isdigit():
-            return dt.date(int(s), 1, 1)  # annual -> Jan 1
-        if "M" in s or "Q" in s:
-            raise NormalizationError(f"sub-annual frequency not supported in Phase 1: {s!r}")
-        raise NormalizationError(f"unparseable date: {s!r}")
+    def _country_code(raw_record: dict) -> str:
+        """ISO-3 code, tolerating the World Bank's two different response shapes.
+
+        On the WDI surface (`source=2`) `countryiso3code` is populated. On some other
+        DataBank sources (notably `source=15`) it is an empty string and `country.id`
+        carries the ISO-3 code instead — so fall back rather than reject a good row.
+        Aggregates and regions ("Sub-Saharan Africa") match neither and are rejected.
+        """
+        iso3 = (raw_record.get("countryiso3code") or "").strip()
+        if len(iso3) != 3 or not iso3.isalpha():
+            iso3 = str((raw_record.get("country") or {}).get("id") or "").strip()
+        if len(iso3) != 3 or not iso3.isalpha():
+            raise NormalizationError(f"non-ISO-3 country code: {iso3!r}")
+        return iso3
