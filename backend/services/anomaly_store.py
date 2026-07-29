@@ -7,6 +7,7 @@ without a database, while all SQL lives here.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -22,32 +23,42 @@ logger = get_logger(__name__)
 _UPSERT_CHUNK = 500
 
 
-async def _series_keys(
+SeriesKey = tuple[str, uuid.UUID]
+
+
+async def _load_all_series(
     session: AsyncSession, source_name: str | None
-) -> list[tuple[str, uuid.UUID]]:
-    """Every (country_code, indicator_id) pair that has stored observations."""
-    stmt = select(TimeSeries.country_code, TimeSeries.indicator_id).distinct()
+) -> dict[SeriesKey, list[Observation]]:
+    """Load every series in **one** query, grouped by (country_code, indicator_id).
+
+    Deliberately not a query per series: there are ~2,900 of them, and one round trip
+    each turned the post-ingestion anomaly pass into a job measured in tens of minutes
+    on a 1 vCPU box. Ordering by the natural key means each group arrives contiguously
+    and already sorted by date, so grouping is a single pass and `detect` receives the
+    chronological order it expects.
+    """
+    stmt = (
+        select(
+            TimeSeries.country_code,
+            TimeSeries.indicator_id,
+            TimeSeries.date,
+            TimeSeries.value,
+        )
+        .where(TimeSeries.value.is_not(None))
+        .order_by(TimeSeries.country_code, TimeSeries.indicator_id, TimeSeries.date)
+    )
     if source_name:
         stmt = stmt.join(DataSource, TimeSeries.source_id == DataSource.id).where(
             DataSource.name == source_name
         )
-    return [(row[0], row[1]) for row in (await session.execute(stmt)).all()]
 
-
-async def _observations(
-    session: AsyncSession, country_code: str, indicator_id: uuid.UUID
-) -> list[Observation]:
-    stmt = (
-        select(TimeSeries.date, TimeSeries.value)
-        .where(TimeSeries.country_code == country_code)
-        .where(TimeSeries.indicator_id == indicator_id)
-        .where(TimeSeries.value.is_not(None))
-        .order_by(TimeSeries.date)
-    )
-    return [
-        Observation(date=row.date, value=float(row.value))
-        for row in (await session.execute(stmt)).all()
-    ]
+    grouped: dict[SeriesKey, list[Observation]] = defaultdict(list)
+    result = await session.stream(stmt)
+    async for row in result:
+        grouped[(row.country_code, row.indicator_id)].append(
+            Observation(date=row.date, value=float(row.value))
+        )
+    return grouped
 
 
 async def refresh_anomalies(
@@ -60,11 +71,10 @@ async def refresh_anomalies(
     Returns a small JSON-friendly summary so scheduled job history stays legible.
     """
     async with session_factory() as session:
-        keys = await _series_keys(session, source_name)
+        grouped = await _load_all_series(session, source_name)
 
         payload: list[dict] = []
-        for country_code, indicator_id in keys:
-            observations = await _observations(session, country_code, indicator_id)
+        for (country_code, indicator_id), observations in grouped.items():
             for anomaly in detect(observations):
                 payload.append(
                     {
@@ -95,11 +105,11 @@ async def refresh_anomalies(
 
     logger.info(
         "anomaly refresh complete: series=%d anomalies=%d source=%s",
-        len(keys),
+        len(grouped),
         len(payload),
         source_name or "all",
     )
-    return {"series_scanned": len(keys), "anomalies": len(payload)}
+    return {"series_scanned": len(grouped), "anomalies": len(payload)}
 
 
 async def count_anomalies(session: AsyncSession) -> int:
