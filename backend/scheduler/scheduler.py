@@ -22,6 +22,7 @@ from db import normalize_db_url
 from logging_config import get_logger
 from scheduler.jobs import (
     run_bis_refresh,
+    run_embeddings_refresh,
     run_forecast_refresh,
     run_fred_refresh,
     run_imf_refresh,
@@ -33,6 +34,7 @@ logger = get_logger(__name__)
 
 WORLD_BANK_JOB_ID = "world_bank_refresh"
 FORECAST_JOB_ID = "forecast_refresh"
+EMBEDDINGS_JOB_ID = "embeddings_refresh"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +46,13 @@ class ScheduledSource:
 
 
 def _schedule() -> list[ScheduledSource]:
-    """The five source jobs plus the forecast job (features.md 2.4 and 1.4).
+    """Seven jobs: five ingestions, plus forecasting and the RAG corpus.
 
-    Hours are staggered so a 1 vCPU box never runs two ingestions at once. The
-    forecast job is deliberately last on Monday: it runs *after* the weekly World
-    Bank and IMF ingestions so it projects from the freshest history rather than
-    from last week's.
+    Hours are staggered so a 1 vCPU box never runs two of them at once. The two
+    derived jobs come last on Monday and in dependency order — forecasts after the
+    weekly World Bank and IMF ingestions so they project from the freshest history,
+    then the corpus rebuild after that, so the chat retrieves the current numbers
+    rather than last week's.
     """
     return [
         ScheduledSource(
@@ -91,6 +94,12 @@ def _schedule() -> list[ScheduledSource]:
             "Forecast pre-computation (Chronos-2 via Modal)",
             run_forecast_refresh,
             {"trigger": "cron", "day_of_week": "mon", "hour": 9},
+        ),
+        ScheduledSource(
+            EMBEDDINGS_JOB_ID,
+            "RAG corpus rebuild (pgvector embeddings)",
+            run_embeddings_refresh,
+            {"trigger": "cron", "day_of_week": "mon", "hour": 11},
         ),
     ]
 

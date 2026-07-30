@@ -214,6 +214,9 @@ class Embedding(Base):
     __tablename__ = "embeddings"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, **_UUID_PK)
+    # Stable per-chunk identity so the weekly rebuild upserts rather than
+    # duplicating or emptying the corpus (supabase/migrations/0010).
+    chunk_key: Mapped[str] = mapped_column(Text, unique=True)
     country_code: Mapped[str | None] = mapped_column(String(3))
     indicator_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("indicators_catalog.id", ondelete="CASCADE")

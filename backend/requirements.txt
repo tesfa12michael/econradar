@@ -45,6 +45,13 @@ statsforecast>=2.0,<3
 # FastAPI's ecosystem, declared here because prompts depend on it directly.
 jinja2>=3.1,<4
 
+# fastembed — runs sentence-transformers/all-MiniLM-L6-v2 (384-d, the width the
+# embeddings table was created at) through onnxruntime instead of torch. Decision
+# #23: local-first embeddings mean retrieval has no external dependency and no
+# shared rate limit, and ONNX keeps ~1 GB of torch off a 2 GB box. Loaded lazily,
+# so a deployment that never serves a chat query never pays for it.
+fastembed>=0.4,<1
+
 # Matplotlib (Agg backend) — server-side chart PNGs for the VLM pipeline
 # (feature 2.1). NOT Plotly + Kaleido: Kaleido 1.x drives an external headless
 # Chrome per render, which this 1 vCPU / 2 GB box cannot afford alongside the API

@@ -28,6 +28,7 @@ from db import get_session_factory
 from logging_config import get_logger
 from services import refresh_anomalies
 from services.forecast_store import refresh_forecasts
+from services.rag_index import refresh_corpus
 
 logger = get_logger(__name__)
 
@@ -115,3 +116,23 @@ async def run_forecast_refresh() -> dict:
         return {"job": "forecast", "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
     logger.info("scheduled forecast refresh complete: %s", summary)
     return {"job": "forecast", "status": "success", **summary}
+
+
+async def run_embeddings_refresh() -> dict:
+    """Rebuild the RAG corpus from current data (feature 2.2) — weekly.
+
+    The seventh job. It runs last on Monday because every chunk it writes restates
+    stored observations: rebuilding before the week's ingestion would embed last
+    week's numbers and leave the chat answering from them for seven days.
+
+    The refresh upserts by `chunk_key` (migration 0010), so the corpus stays
+    complete and queryable throughout — there is no window where chat retrieves
+    nothing because the index is mid-rebuild.
+    """
+    try:
+        summary = await refresh_corpus(get_session_factory())
+    except Exception as exc:
+        logger.exception("scheduled embeddings refresh failed")
+        return {"job": "embeddings", "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    logger.info("scheduled embeddings refresh complete: %s", summary)
+    return {"job": "embeddings", "status": "success", **summary}

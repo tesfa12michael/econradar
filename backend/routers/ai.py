@@ -13,18 +13,25 @@ historical chart renders from `data.py` immediately.
 
 from __future__ import annotations
 
+import json
+from collections.abc import AsyncIterator
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_session
 from schemas import (
     AnomalyExplanationOut,
     ChartInterpretationOut,
+    ChatRequest,
+    ChatResponse,
     ForecastOut,
     ForecastPointOut,
     NarrationOut,
 )
 from services.anomaly_explain import explain_anomalies
+from services.chat import answer_chat, stream_chat
 from services.forecast_store import get_forecast
 from services.narration import narrate_series
 from services.vlm_interpret import interpret_chart
@@ -39,6 +46,13 @@ def _iso3(country_code: str) -> str:
             status_code=422, detail=f"country_code must be ISO-3 alpha, got {country_code!r}"
         )
     return code
+
+
+def _history(request: ChatRequest) -> list[dict[str, str]]:
+    """Conversation turns as plain dicts. Trimming to the documented four turns
+    happens in `services/rag.py`, so the limit is enforced once, server-side,
+    however the request arrived."""
+    return [turn.model_dump() for turn in request.history]
 
 
 @router.get("/forecast/{country_code}", response_model=ForecastOut)
@@ -169,3 +183,45 @@ async def get_anomaly_explanations(
         )
         for e in explanations
     ]
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def post_chat(
+    request: ChatRequest, session: AsyncSession = Depends(get_session)
+) -> ChatResponse:
+    """Grounded, cited answer to one question (feature 2.2), collected.
+
+    The streaming form is `/chat/stream`; this one is for callers that cannot
+    consume SSE, and it returns only answers that passed verification.
+    """
+    result = await answer_chat(session, request.question, _history(request))
+    return ChatResponse(**result)
+
+
+@router.post("/chat/stream")
+async def post_chat_stream(
+    request: ChatRequest, session: AsyncSession = Depends(get_session)
+) -> StreamingResponse:
+    """Server-sent events for the chat UI (feature 2.2).
+
+    Event order is `citations`, then `token`* (possibly interrupted by `reset` if
+    a provider fails mid-stream), then exactly one `verdict`, then `done`. The
+    tokens are **provisional**: the client must not present them as a final answer
+    until the verdict arrives, because groundedness can only be checked on the
+    reassembled text. A `grounded: false` verdict means retract what was rendered.
+    """
+
+    async def events() -> AsyncIterator[str]:
+        async for event in stream_chat(session, request.question, _history(request)):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # Tells any intermediate proxy not to buffer, which would collect the
+            # whole stream and defeat the point of streaming it.
+            "X-Accel-Buffering": "no",
+        },
+    )

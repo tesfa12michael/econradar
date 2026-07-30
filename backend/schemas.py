@@ -212,6 +212,51 @@ class AnomalyExplanationOut(BaseModel):
     cached: bool = False
 
 
+class ChatTurn(BaseModel):
+    role: str  # user | assistant
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """One question plus the recent conversation (feature 2.2).
+
+    History is supplied by the client and trimmed server-side to the documented
+    four turns — it resolves pronouns and follow-ups, and is explicitly not
+    evidence: the prompt says so, and only retrieved chunks are verified against.
+    """
+
+    question: str
+    history: list[ChatTurn] = []
+
+
+class CitationOut(BaseModel):
+    """A retrieved evidence card, numbered to match the [n] markers in the answer."""
+
+    index: int
+    country_code: str | None = None
+    country_name: str | None = None
+    indicator_code: str | None = None
+    indicator_name: str | None = None
+    chunk_type: str | None = None
+    similarity: float = 0.0
+
+
+class ChatResponse(BaseModel):
+    """A verified answer, or an empty one with the reason it did not survive.
+
+    `answer` is empty whenever `grounded` is false. There is no partial-credit
+    state: an answer that failed verification is not returned in any form.
+    """
+
+    answer: str
+    citations: list[CitationOut] = []
+    grounded: bool = False
+    groundedness_score: float | None = None
+    provider: str | None = None
+    cached: bool = False
+    error: str | None = None
+
+
 class HealthOut(BaseModel):
     status: str
     environment: str
