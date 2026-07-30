@@ -1,0 +1,44 @@
+Explain, in {{ min_words }}–{{ max_words }} words, what this statistically flagged
+observation looks like within its own series.
+
+Describe the shape of the move: how the flagged value sits against the readings
+around it, and how far the detector judged it to deviate. If more than one
+observation is flagged nearby, say what distinguishes this one — do not merge them
+into a single event.
+
+Say plainly what you cannot know. You have no news, policy or event data, so do not
+name a cause — no election, war, pandemic, devaluation, commodity shock or policy
+decision — however plausible it would sound. "The data does not say why" is the
+correct ending when nothing in the block explains it.
+
+DATA BLOCK
+==========
+Country:   {{ country }}
+Indicator: {{ indicator }}{% if unit %} — measured in {{ unit }}{% endif %}
+Source:    {{ source }}
+
+Flagged observation:
+  {{ anomaly.date }}: {{ anomaly.value }}{{ unit_suffix }}
+  Type: {{ anomaly.deviation_type }}
+{% if anomaly.z_score is not none -%}
+  Z-score against the trailing window: {{ anomaly.z_score }}
+{% else -%}
+  Z-score: not defined for this observation — the surrounding window has no spread,
+  so the detector classified it as a structural break rather than scoring it.
+{% endif %}
+Surrounding observations:
+{% for point in window -%}
+  {{ point.date }}: {{ point.value }}{{ unit_suffix }}{% if point.date == anomaly.date %}   <- the flagged point{% endif %}
+
+{% endfor %}
+{% if other_anomalies -%}
+Other flagged observations in this series:
+{% for a in other_anomalies -%}
+  {{ a.date }}: {{ a.value }}{{ unit_suffix }} — {{ a.deviation_type }}
+{% endfor %}
+{%- else -%}
+No other observations in this series are flagged.
+{%- endif %}
+==========
+
+Remember: every figure you write must appear above, and you must not name a cause.

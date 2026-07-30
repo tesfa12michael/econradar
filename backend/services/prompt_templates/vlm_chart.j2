@@ -1,0 +1,46 @@
+You are looking at a chart rendered from the data block below. Interpret what the
+chart *shows*, in {{ min_words }}–{{ max_words }} words.
+
+Describe three things: the overall trend direction, where the line changes
+character (inflection points, plateaus, reversals), and how volatile the series
+looks — smooth, choppy, or punctuated by isolated jumps. If a forecast band is
+drawn on the right of the chart, say whether it widens or stays tight.
+
+Read the picture, but take every number from the data block. The axis labels in the
+image are rendered at limited resolution and must not be read off as values; if you
+want to cite a figure, use the block.
+
+Do not describe anything the chart does not contain — no second series, no
+annotations, no gridline values, no legend entries that are not listed below.
+
+DATA BLOCK
+==========
+Country:   {{ country }}
+Indicator: {{ indicator }}{% if unit %} — measured in {{ unit }}{% endif %}
+Source:    {{ source }}
+Plotted:   {{ observation_count }} historical observations, {{ first_date }} to {{ last_date }}
+
+Series extremes as plotted:
+  lowest  {{ extremes.min_value }}{{ unit_suffix }} in {{ extremes.min_date }}
+  highest {{ extremes.max_value }}{{ unit_suffix }} in {{ extremes.max_date }}
+Latest plotted observation:
+  {{ latest.date }}: {{ latest.value }}{{ unit_suffix }}
+
+{% if forecast -%}
+Forecast band drawn on the chart — {{ forecast.model }}, {{ forecast.horizon }} periods:
+{% for point in forecast.points -%}
+  {{ point.date }}: median {{ point.median }}{{ unit_suffix }} (p10 {{ point.lower }}{{ unit_suffix }}, p90 {{ point.upper }}{{ unit_suffix }})
+{% endfor %}
+{%- else -%}
+No forecast band is drawn on this chart.
+{%- endif %}
+
+{% if anomalies -%}
+Points marked on the chart:
+{% for a in anomalies -%}
+  {{ a.date }}: {{ a.value }}{{ unit_suffix }} — {{ a.deviation_type }}
+{% endfor %}
+{%- else -%}
+No points are marked on this chart.
+{%- endif %}
+==========
