@@ -21,6 +21,7 @@ from connectors import (
     WBDataBankConnector,
 )
 from connectors.bis import POLICY_RATE_CODE
+from connectors.fred import FRED_SERIES
 
 # ── IMF ──────────────────────────────────────────────────────
 
@@ -184,6 +185,29 @@ def test_fred_maps_series_id_to_country_and_indicator() -> None:
     assert rec.country_code == "USA"
     assert rec.indicator_code == "FRED.POLRATE"
     assert rec.date == dt.date(2026, 6, 1)
+
+
+def test_fred_frequency_is_declared_not_inferred_from_the_date() -> None:
+    """CPI is monthly, but FRED dates it `1947-01-01` — which reads as daily.
+
+    Inferring from the date shape labelled all four FRED indicators `daily` in
+    indicators_catalog, CPI and the unemployment rate included.
+    """
+    c = FREDConnector(api_key="test")
+    rec = c.normalize({"series_id": "CPIAUCSL", "date": "1947-01-01", "value": "21.48"})
+    assert rec.frequency == "monthly"
+
+
+def test_fred_shared_indicator_codes_have_one_frequency() -> None:
+    """An indicator code shared across countries must mean the same measurement.
+
+    GOV10Y once paired daily US data with monthly European data, leaving a single
+    indicators_catalog.frequency to describe both.
+    """
+    by_code: dict[str, set[str]] = {}
+    for series in FRED_SERIES:
+        by_code.setdefault(series.indicator_code, set()).add(series.frequency)
+    assert all(len(freqs) == 1 for freqs in by_code.values()), by_code
 
 
 def test_fred_missing_observation_sentinel_is_skipped() -> None:

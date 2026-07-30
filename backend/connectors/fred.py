@@ -10,6 +10,13 @@ concept with no parseable structure (`CPALTT01USM657N` is US CPI). So the countr
 indicator mapping is an explicit curated registry rather than anything derived, and
 adding coverage means adding a registry entry.
 
+**Frequency is declared, not inferred.** FRED dates a monthly observation as the first
+day of the month (`1947-01-01`), which is indistinguishable from a daily observation
+that happens to fall on the 1st — so `parse_period` reads every FRED date as daily and
+labelled all four indicators `daily`, CPI included. The frequency is a property of the
+series, which only FRED's metadata knows, so it lives in the registry beside the unit
+and the value kind and overrides whatever the date's shape implies.
+
 Discontinued series are a documented edge case: FRED keeps them queryable and simply
 stops emitting new observations, so a stale series is not an error. Genuinely missing
 observations arrive as the string "." and are skipped.
@@ -18,8 +25,9 @@ observations arrive as the string "." and are skipped.
 from __future__ import annotations
 
 import asyncio
+import enum
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 import httpx
 from pydantic import ValidationError as PydanticValidationError
@@ -27,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
 from connectors.base import BaseDataSourceConnector, NormalizationError, SkipRecord
-from connectors.dates import UnparseableDate, parse_period
+from connectors.dates import MONTHLY, UnparseableDate, parse_period
 from connectors.http import get_json
 from connectors.validation import ValueKind
 from logging_config import get_logger
@@ -40,6 +48,19 @@ logger = get_logger(__name__)
 _REQUEST_SPACING_S = 0.2
 
 
+class _Unset(enum.Enum):
+    """Sentinel distinguishing "argument omitted" from "argument was None"."""
+
+    TOKEN = enum.auto()
+
+
+#: `api_key=None` used to fall back to the ambient `FRED_API_KEY`, so it could not
+#: express "no key" — which meant the self-disable tests silently stopped testing
+#: anything the moment a key was configured, and would have failed on the VPS. An
+#: explicit argument is now authoritative; omit it to read the setting.
+_UNSET: Final = _Unset.TOKEN
+
+
 @dataclass(frozen=True, slots=True)
 class FredSeries:
     series_id: str
@@ -48,10 +69,21 @@ class FredSeries:
     indicator_name: str
     unit: str
     kind: ValueKind
+    #: FRED's own `frequency_short`, spelled in our vocabulary. Declared per series
+    #: rather than assumed uniform: FRED publishes daily, monthly and annual series
+    #: side by side, and its dates do not distinguish them.
+    frequency: str = MONTHLY
 
 
 #: Curated series. Indicator codes are EconRadar-side so the same concept lines up
 #: across countries, while series_id stays FRED's own identifier.
+#:
+#: An indicator code shared across countries has to mean the *same measurement*, so the
+#: 10-year yield uses the OECD-harmonised monthly series for all four countries. The US
+#: entry was originally DGS10, the daily constant-maturity yield: 16k observations
+#: against ~800 for its peers, not comparable on a chart or in a ranking, and it forced
+#: one `indicators_catalog.frequency` column to describe both daily and monthly data.
+#: IRLTLT01USM156N is the like-for-like series and starts earlier (1953 vs 1962).
 FRED_SERIES: tuple[FredSeries, ...] = (
     FredSeries("FEDFUNDS", "USA", "FRED.POLRATE", "Policy interest rate (%)", "%", ValueKind.RATE),
     FredSeries(
@@ -66,7 +98,12 @@ FRED_SERIES: tuple[FredSeries, ...] = (
         ValueKind.INDEX,
     ),
     FredSeries(
-        "DGS10", "USA", "FRED.GOV10Y", "10-year government bond yield (%)", "%", ValueKind.RATE
+        "IRLTLT01USM156N",
+        "USA",
+        "FRED.GOV10Y",
+        "10-year government bond yield (%)",
+        "%",
+        ValueKind.RATE,
     ),
     FredSeries(
         "IRLTLT01DEM156N",
@@ -122,12 +159,12 @@ class FREDConnector(BaseDataSourceConnector):
         self,
         session_factory: async_sessionmaker[AsyncSession] | None = None,
         client: httpx.AsyncClient | None = None,
-        api_key: str | None = None,
+        api_key: str | _Unset | None = _UNSET,
         request_timeout: float = 45.0,
     ) -> None:
         super().__init__(session_factory=session_factory)
         self._client = client
-        self._api_key = api_key if api_key is not None else settings.fred_api_key
+        self._api_key = settings.fred_api_key if api_key is _UNSET else api_key
         self._timeout = request_timeout
         for series in FRED_SERIES:
             self._indicator_names[series.indicator_code] = series.indicator_name
@@ -204,7 +241,10 @@ class FREDConnector(BaseDataSourceConnector):
             raise SkipRecord(f"missing observation for {series_id}/{raw_record.get('date')}")
 
         try:
-            obs_date, frequency = parse_period(raw_record.get("date"))
+            # The parsed frequency is discarded: FRED dates a monthly observation as the
+            # 1st of the month, so the date's shape always reads as daily. Only the
+            # registry knows what the series actually is.
+            obs_date, _ = parse_period(raw_record.get("date"))
         except UnparseableDate as exc:
             raise NormalizationError(str(exc)) from exc
 
@@ -216,7 +256,7 @@ class FREDConnector(BaseDataSourceConnector):
                 date=obs_date,
                 value=float(raw_value),
                 unit=series.unit,
-                frequency=frequency,
+                frequency=series.frequency,
             )
         except (PydanticValidationError, TypeError, ValueError) as exc:
             raise NormalizationError(f"could not build record: {exc}") from exc
