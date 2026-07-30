@@ -3,27 +3,29 @@
 import { DeckGL } from '@deck.gl/react';
 import { GeoJsonLayer } from '@deck.gl/layers';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-// Aliased: a bare `Map` import would shadow the global Map constructor used below.
-import MapLibreCanvas from 'react-map-gl/maplibre';
 import { useRouter } from 'next/navigation';
 
 import { formatValue, type MapPoint } from '@/lib/api';
 import { buildDomain, colorFor, legendStops, rgbToCss, type RGB } from '@/lib/colorScale';
 
-import 'maplibre-gl/dist/maplibre-gl.css';
-
-/** A MapLibre style with no tile sources at all — just a flat background.
+/* There is deliberately no base map here.
  *
- * The choropleth is the visualization; basemap imagery would only add noise behind it,
- * and a tile-free style means no key, no external request, and nothing to rate-limit.
+ * The choropleth *is* the visualization — basemap imagery would only add noise behind
+ * it — so this used to render a MapLibre canvas with a tile-free style whose single
+ * layer painted `#0A0F1E`. That is exactly `--bg-app`, which the container below
+ * already paints, so MapLibre was drawing an invisible rectangle at the cost of a
+ * whole WebGL mapping library and a web worker.
+ *
+ * It also broke the page. maplibre-gl v6 is an ESM-only rewrite that spawns a *module*
+ * worker resolved from `import.meta.url`; webpack never emitted `maplibre-gl-worker.mjs`
+ * as a static asset, so the browser fetched a URL that 404'd to Next's HTML error page
+ * ("non-JavaScript MIME type text/html"), the worker never started, and the map crashed
+ * dereferencing its own uninitialised state. react-map-gl 8.1.1 declares
+ * `maplibre-gl: ">=4.0.0"`, so npm accepted the breaking major without a peer warning.
+ *
+ * deck.gl already owns the canvas, the Web Mercator view, the controller and picking.
+ * Nothing below needs a base map, so there is nothing to pin a version of.
  */
-const BLANK_STYLE = {
-  version: 8 as const,
-  sources: {},
-  layers: [
-    { id: 'bg', type: 'background' as const, paint: { 'background-color': '#0A0F1E' } },
-  ],
-};
 
 const INITIAL_VIEW = { longitude: 10, latitude: 25, zoom: 1.1, pitch: 0, bearing: 0 };
 
@@ -150,9 +152,7 @@ export function WorldMap({ points, indicatorCode, indicatorName, unit }: Props) 
             )
           }
           getCursor={({ isHovering }) => (isHovering ? 'pointer' : 'grab')}
-        >
-          <MapLibreCanvas mapStyle={BLANK_STYLE} attributionControl={false} />
-        </DeckGL>
+        />
       </div>
 
       {!geo && (

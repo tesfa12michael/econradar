@@ -2,9 +2,8 @@
 
 Next.js 15 (App Router, TypeScript strict) + Tailwind CSS v4.
 
-Phase 1 is an on-brand placeholder that live-checks the backend `/health` endpoint. The
-interactive world map (MapLibre + deck.gl), country profiles (Recharts), and RAG chat land in
-Phase 2 with shadcn/ui.
+The interactive world map (deck.gl choropleth, no base map) and country profiles (Recharts)
+landed in Phase 2. Forecasting, LLM narration and RAG chat arrive in Phase 3.
 
 ## Develop
 
