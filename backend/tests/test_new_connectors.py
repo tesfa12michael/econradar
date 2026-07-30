@@ -167,12 +167,20 @@ async def test_fred_self_disables_without_a_key() -> None:
     assert await c.fetch() == []
 
 
-async def test_unconfigured_source_records_no_pipeline_run() -> None:
+async def test_unconfigured_source_records_no_pipeline_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """A source that never ran must not claim a last_successful_run on /status.
 
-    run() short-circuits before touching the database, so no session factory is
-    needed — which is also what proves nothing was written.
+    The session factory is stubbed to fail rather than merely left unset: asserting on
+    the returned status alone passes on any machine with a DATABASE_URL, which is why
+    the original ordering bug — building the engine *before* the configured check —
+    only ever surfaced in CI.
     """
+
+    def _explode() -> None:
+        raise AssertionError("run() must not touch the database for an unconfigured source")
+
+    monkeypatch.setattr("connectors.base.get_session_factory", _explode)
+
     result = await FREDConnector(api_key=None).run()
     assert result.status == "skipped"
     assert result.run_id is None

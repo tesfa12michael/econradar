@@ -182,8 +182,11 @@ class BaseDataSourceConnector(ABC):
 
     async def run(self, **fetch_kwargs: Any) -> PipelineRunResult:
         """Fetch → normalize → validate → persist, with full run/error logging."""
-        factory = self._session_factory or get_session_factory()
-
+        # Checked before the session factory is built, not after: `get_session_factory()`
+        # constructs the engine and raises without DATABASE_URL, so acquiring it first
+        # made "skips without touching the database" false — an unconfigured source
+        # failed on a machine that had no database rather than skipping cleanly. CI
+        # caught it; every developer machine has a DATABASE_URL and hid it.
         if not self.is_configured:
             logger.warning(
                 "[%s] not configured — skipping. No pipeline run recorded, so /status "
@@ -192,6 +195,7 @@ class BaseDataSourceConnector(ABC):
             )
             return PipelineRunResult(None, "skipped", 0, 0, 0, 0)
 
+        factory = self._session_factory or get_session_factory()
         run_id = await self._start_run(factory)
         logger.info("[%s] pipeline run %s started", self.source_name, run_id)
 
