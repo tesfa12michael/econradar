@@ -45,6 +45,10 @@ INSUFFICIENT_DATA = (
 # Short, ambiguous country names that would match half the questions asked.
 _NAME_STOPWORDS = {"chad", "jordan", "georgia", "guinea", "niger", "turkey", "mali"}
 
+#: Slots held back from the metadata filter for the unfiltered search, so a
+#: comparative question always retrieves something outside the country it named.
+_OPEN_SLOTS = 3
+
 
 @dataclass(frozen=True, slots=True)
 class Evidence:
@@ -68,6 +72,23 @@ class RetrievalResult:
         return not self.evidence
 
 
+def _names_country(name: str, lowered: str, words: set[str]) -> bool:
+    """Whether a question mentions this country.
+
+    Two forms, both of which a naive substring check gets wrong. A word boundary
+    rather than space padding, because "…compare with Ghana?" ends in punctuation
+    and " ghana " never matches it. And an adjectival prefix, because "Brazilian
+    policy rates" is a question about Brazil and " brazil " is not in it.
+    """
+    if re.search(rf"\b{re.escape(name)}\b", lowered):
+        return True
+    # "brazilian" -> "brazil", "ghanaian" -> "ghana". Bounded so a long unrelated
+    # word cannot match a short country name by sharing its opening letters.
+    return len(name) >= 5 and any(
+        word.startswith(name) and len(word) <= len(name) + 4 for word in words
+    )
+
+
 async def detect_filters(session: AsyncSession, question: str) -> tuple[list[str], list[uuid.UUID]]:
     """Country codes and indicator ids the question names.
 
@@ -87,12 +108,12 @@ async def detect_filters(session: AsyncSession, question: str) -> tuple[list[str
     ):
         lower_name = name.lower()
         if lower_name in _NAME_STOPWORDS:
-            if re.search(rf"\b{re.escape(lower_name)}\b'?s?\s", lowered) and (
+            if re.search(rf"\b{re.escape(lower_name)}\b", lowered) and (
                 "gdp" in lowered or "inflation" in lowered or "economy" in lowered
             ):
                 countries.append(code)
             continue
-        if f" {lower_name} " in lowered or code.lower() in words:
+        if _names_country(lower_name, lowered, words) or code.lower() in words:
             countries.append(code)
 
     indicators: list[uuid.UUID] = []
@@ -189,10 +210,14 @@ async def retrieve(session: AsyncSession, question: str) -> RetrievalResult:
     evidence: list[Evidence] = []
     seen: set[str] = set()
     if countries or indicators:
+        # Slots are *reserved* for the open search rather than merely left over.
+        # Letting the filter take all of them is how "compare Nigeria with Ghana"
+        # comes back as eight Nigerian chunks and no Ghanaian one — the failure
+        # features.md 2.2 describes as retrieval silently truncating the question.
         filtered, keys = await _search(
             session,
             vector,
-            limit=top_k,
+            limit=max(1, top_k - _OPEN_SLOTS),
             countries=countries or None,
             indicators=indicators or None,
         )
@@ -200,9 +225,6 @@ async def retrieve(session: AsyncSession, question: str) -> RetrievalResult:
         seen.update(keys)
 
     if len(evidence) < top_k:
-        # Backfill rather than replace: a comparative question needs the countries
-        # it did not name, and truncating to the named one would answer a
-        # different question than the one asked.
         extra, _ = await _search(
             session, vector, limit=top_k - len(evidence), exclude_keys=seen or None
         )
