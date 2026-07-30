@@ -95,6 +95,106 @@ export interface CountryProfile {
   flag_emoji: string | null;
 }
 
+/* ── Phase 3 intelligence layer ───────────────────────────────────────────── */
+
+export interface ForecastPoint {
+  date: string;
+  median: number;
+  lower: number;
+  upper: number;
+}
+
+export interface Forecast {
+  country_code: string;
+  indicator_code: string;
+  indicator_name: string | null;
+  unit: string | null;
+  frequency: string | null;
+  /** Which model in the cascade produced this — always shown, never inferred. */
+  model_used: string;
+  horizon: number;
+  points: ForecastPoint[];
+  cached: boolean;
+  generated_at: string | null;
+}
+
+export interface Narration {
+  country_code: string;
+  indicator_code: string;
+  text: string;
+  provider: string;
+  model: string;
+  /** The verifier's verdict on this exact text, recorded when it was generated. */
+  groundedness_score: number | null;
+  cached: boolean;
+}
+
+export interface ChartInterpretation extends Narration {}
+
+export interface AnomalyExplanation {
+  country_code: string;
+  indicator_code: string;
+  date: string;
+  value: number | null;
+  z_score: number | null;
+  deviation_type: string | null;
+  /** null when no provider returned a grounded explanation — never invented. */
+  explanation: string | null;
+  cached: boolean;
+}
+
+export interface Citation {
+  index: number;
+  country_code: string | null;
+  country_name: string | null;
+  indicator_code: string | null;
+  indicator_name: string | null;
+  chunk_type: string | null;
+  similarity: number;
+}
+
+export interface ChatTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/** Labels for the model that produced a forecast — the cascade is visible to the reader. */
+export const MODEL_LABELS: Record<string, string> = {
+  chronos2: 'Chronos-2',
+  timesfm: 'TimesFM',
+  statsforecast: 'StatsForecast',
+};
+
+export const PROVIDER_LABELS: Record<string, string> = {
+  mistral: 'Mistral',
+  groq: 'Groq',
+  openrouter: 'OpenRouter',
+  gemini_flash: 'Gemini Flash',
+  qwen3_vl_openrouter: 'Qwen3-VL',
+};
+
+export function modelLabel(model: string | null | undefined): string {
+  if (!model) return 'unknown';
+  return MODEL_LABELS[model] ?? PROVIDER_LABELS[model] ?? model;
+}
+
+/** Same-origin path for an AI endpoint (see app/api/ai/[...path]/route.ts). */
+export function aiUrl(path: string): string {
+  return `/api/ai/${path.replace(/^\//, '')}`;
+}
+
+/** Browser-side fetch for the async AI panels. Returns null on any failure so a
+ * slow or unavailable panel never takes the page with it. */
+export async function fetchAi<T>(path: string, signal?: AbortSignal): Promise<T | null> {
+  try {
+    const res = await fetch(aiUrl(path), { signal, cache: 'no-store' });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** Fetch JSON, returning null rather than throwing so a slow or failed AI/data panel
  * never takes down the page around it. */
 export async function fetchJson<T>(path: string, revalidate = 300): Promise<T | null> {

@@ -1,15 +1,13 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { SeriesChart } from '@/components/SeriesChart';
 import {
-  AnomalyBadge,
-  Card,
-  ComingSoonPanel,
-  EmptyState,
-  PanelHeading,
-  SourceChip,
-} from '@/components/ui';
+  AnomalyExplanationsPanel,
+  ChartAnalysisPanel,
+  NarrationPanel,
+} from '@/components/AiPanel';
+import { ForecastChart } from '@/components/ForecastChart';
+import { AnomalyBadge, Card, EmptyState, PanelHeading, SourceChip } from '@/components/ui';
 import {
   fetchJson,
   formatValue,
@@ -112,7 +110,12 @@ export default async function CountryPage({ params, searchParams }: PageProps) {
             <SourceChip source={series?.source} />
           </div>
           {series && series.observations.some((o) => o.value !== null) ? (
-            <SeriesChart
+            /* `key` on the indicator so switching tabs remounts the overlay and the
+               in-flight forecast request is aborted rather than racing the new one. */
+            <ForecastChart
+              key={selected}
+              countryCode={iso3}
+              indicator={selected}
               observations={series.observations}
               anomalies={flagged}
               unit={series.unit}
@@ -126,15 +129,10 @@ export default async function CountryPage({ params, searchParams }: PageProps) {
           )}
         </Card>
 
+        {/* Each panel fetches independently, after the chart above has painted. */}
         <div className="flex flex-col gap-5">
-          <ComingSoonPanel
-            title="AI narration"
-            description="A grounded, plain-English reading of this series. Every number it cites will come from the data above — the model narrates precomputed values and never estimates one."
-          />
-          <ComingSoonPanel
-            title="AI chart analysis"
-            description="A vision model interprets the rendered chart itself, describing trend direction, inflection points and volatility."
-          />
+          <NarrationPanel key={`n-${selected}`} countryCode={iso3} indicator={selected} />
+          <ChartAnalysisPanel key={`v-${selected}`} countryCode={iso3} indicator={selected} />
         </div>
       </div>
 
@@ -158,6 +156,10 @@ export default async function CountryPage({ params, searchParams }: PageProps) {
           <EmptyState title="No anomalies flagged for this series" />
         )}
       </Card>
+
+      {flagged.length > 0 && (
+        <AnomalyExplanationsPanel key={`a-${selected}`} countryCode={iso3} indicator={selected} />
+      )}
 
       <Card>
         <PanelHeading>Key metrics</PanelHeading>

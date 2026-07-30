@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Suspense } from 'react';
 
 import { IndicatorSelector } from '@/components/IndicatorSelector';
@@ -51,14 +52,28 @@ export default async function Home({ searchParams }: PageProps) {
             style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}
             className="text-[10px] uppercase tracking-[0.25em]"
           >
-            Phase 2
+            Live data
           </span>
         </div>
-        {options.length > 0 && (
-          <Suspense fallback={<Skeleton className="h-9 w-72" />}>
-            <IndicatorSelector options={options} selected={selected} />
-          </Suspense>
-        )}
+        <div className="flex flex-wrap items-center gap-3">
+          {options.length > 0 && (
+            <Suspense fallback={<Skeleton className="h-9 w-72" />}>
+              <IndicatorSelector options={options} selected={selected} />
+            </Suspense>
+          )}
+          {/* Topbar navigation only — the map needs the full width (design system). */}
+          <Link
+            href="/chat"
+            className="rounded-lg border px-3 py-2 text-sm transition-colors hover:opacity-80 focus-visible:outline focus-visible:outline-2"
+            style={{
+              borderColor: 'var(--accent)',
+              color: 'var(--accent)',
+              outlineColor: 'var(--accent)',
+            }}
+          >
+            Ask the data
+          </Link>
+        </div>
       </header>
 
       {map ? (
