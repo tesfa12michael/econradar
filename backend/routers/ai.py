@@ -17,9 +17,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import get_session
-from schemas import ForecastOut, ForecastPointOut, NarrationOut
+from schemas import (
+    AnomalyExplanationOut,
+    ChartInterpretationOut,
+    ForecastOut,
+    ForecastPointOut,
+    NarrationOut,
+)
+from services.anomaly_explain import explain_anomalies
 from services.forecast_store import get_forecast
 from services.narration import narrate_series
+from services.vlm_interpret import interpret_chart
 
 router = APIRouter(tags=["ai"])
 
@@ -99,3 +107,65 @@ async def get_narration(
         groundedness_score=narration.groundedness_score,
         cached=narration.cached,
     )
+
+
+@router.get("/vlm-interpret/{country_code}", response_model=ChartInterpretationOut)
+async def get_chart_interpretation(
+    country_code: str,
+    indicator: str = Query(description="Indicator code whose chart to interpret"),
+    session: AsyncSession = Depends(get_session),
+) -> ChartInterpretationOut:
+    """A vision model's reading of this series' chart (feature 2.1).
+
+    The chart is rendered here, server-side, from the same data the page plots — so
+    the description is of the image the reader is looking at, not of one the model
+    imagined. Cached for seven days.
+    """
+    iso3 = _iso3(country_code)
+    interpretation = await interpret_chart(session, iso3, indicator.strip())
+    if interpretation is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No chart interpretation available for {iso3} / {indicator!r}. The "
+            "series may be absent, the chart may have failed to render, or no vision "
+            "provider returned a grounded reading.",
+        )
+    return ChartInterpretationOut(
+        country_code=interpretation.country_code,
+        indicator_code=interpretation.indicator_code,
+        text=interpretation.text,
+        provider=interpretation.provider,
+        model=interpretation.model,
+        groundedness_score=interpretation.groundedness_score,
+        cached=interpretation.cached,
+    )
+
+
+@router.get("/anomaly-explanations/{country_code}", response_model=list[AnomalyExplanationOut])
+async def get_anomaly_explanations(
+    country_code: str,
+    indicator: str = Query(description="Indicator code whose anomalies to explain"),
+    limit: int = Query(default=3, ge=1, le=10),
+    session: AsyncSession = Depends(get_session),
+) -> list[AnomalyExplanationOut]:
+    """Grounded explanations for this series' most notable anomalies (feature 2.3).
+
+    Generated on first view and written to `anomalies.llm_explanation`, where they
+    persist — anomaly retraction is timestamp-based specifically so a re-score does
+    not discard them.
+    """
+    iso3 = _iso3(country_code)
+    explanations = await explain_anomalies(session, iso3, indicator.strip(), limit=limit)
+    return [
+        AnomalyExplanationOut(
+            country_code=e.country_code,
+            indicator_code=e.indicator_code,
+            date=e.date,
+            value=e.value,
+            z_score=e.z_score,
+            deviation_type=e.deviation_type,
+            explanation=e.explanation,
+            cached=e.cached,
+        )
+        for e in explanations
+    ]

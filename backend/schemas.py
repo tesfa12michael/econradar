@@ -181,6 +181,37 @@ class NarrationOut(BaseModel):
     cached: bool = False
 
 
+class ChartInterpretationOut(BaseModel):
+    """A vision model's reading of the rendered chart (feature 2.1)."""
+
+    country_code: str
+    indicator_code: str
+    text: str
+    provider: str
+    model: str
+    groundedness_score: float | None = None
+    cached: bool = False
+
+
+class AnomalyExplanationOut(BaseModel):
+    """A grounded explanation of one flagged observation (feature 2.3).
+
+    `explanation` is nullable: when no provider returns a grounded response the
+    anomaly is still returned, with its statistics and without prose. A flagged
+    observation with no explanation is a true state of the system; an invented
+    explanation would not be.
+    """
+
+    country_code: str
+    indicator_code: str
+    date: dt.date
+    value: float | None = None
+    z_score: float | None = None
+    deviation_type: str | None = None
+    explanation: str | None = None
+    cached: bool = False
+
+
 class HealthOut(BaseModel):
     status: str
     environment: str

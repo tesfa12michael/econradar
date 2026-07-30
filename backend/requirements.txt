@@ -44,3 +44,10 @@ statsforecast>=2.0,<3
 # Jinja2 — LLM prompt templates (feature 1.5). Already present transitively via
 # FastAPI's ecosystem, declared here because prompts depend on it directly.
 jinja2>=3.1,<4
+
+# Matplotlib (Agg backend) — server-side chart PNGs for the VLM pipeline
+# (feature 2.1). NOT Plotly + Kaleido: Kaleido 1.x drives an external headless
+# Chrome per render, which this 1 vCPU / 2 GB box cannot afford alongside the API
+# and five ingestion jobs, and 0.2.1's bundled Chromium is unmaintained. Decision
+# #25 — decision #9's substance (deterministic server-side rendering) is unchanged.
+matplotlib>=3.9,<4
