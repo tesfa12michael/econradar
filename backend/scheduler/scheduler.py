@@ -22,6 +22,7 @@ from db import normalize_db_url
 from logging_config import get_logger
 from scheduler.jobs import (
     run_bis_refresh,
+    run_forecast_refresh,
     run_fred_refresh,
     run_imf_refresh,
     run_wb_databank_refresh,
@@ -31,6 +32,7 @@ from scheduler.jobs import (
 logger = get_logger(__name__)
 
 WORLD_BANK_JOB_ID = "world_bank_refresh"
+FORECAST_JOB_ID = "forecast_refresh"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,9 +44,12 @@ class ScheduledSource:
 
 
 def _schedule() -> list[ScheduledSource]:
-    """The five source jobs and their cadences (features.md 2.4).
+    """The five source jobs plus the forecast job (features.md 2.4 and 1.4).
 
-    Hours are staggered so a 1 vCPU box never runs two ingestions at once.
+    Hours are staggered so a 1 vCPU box never runs two ingestions at once. The
+    forecast job is deliberately last on Monday: it runs *after* the weekly World
+    Bank and IMF ingestions so it projects from the freshest history rather than
+    from last week's.
     """
     return [
         ScheduledSource(
@@ -80,6 +85,12 @@ def _schedule() -> list[ScheduledSource]:
             "World Bank GEM monthly refresh",
             run_wb_databank_refresh,
             {"trigger": "cron", "day": 3, "hour": 7},
+        ),
+        ScheduledSource(
+            FORECAST_JOB_ID,
+            "Forecast pre-computation (Chronos-2 via Modal)",
+            run_forecast_refresh,
+            {"trigger": "cron", "day_of_week": "mon", "hour": 9},
         ),
     ]
 

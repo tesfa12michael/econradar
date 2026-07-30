@@ -135,6 +135,52 @@ class IndicatorOptionOut(BaseModel):
     country_count: int = 0
 
 
+class ForecastPointOut(BaseModel):
+    """One projected period. `lower`/`upper` are the p10/p90 bounds."""
+
+    date: dt.date
+    median: float
+    lower: float
+    upper: float
+
+
+class ForecastOut(BaseModel):
+    """A quantile forecast (feature 1.4).
+
+    `model_used` is always reported, never inferred by the client: which model in
+    the Chronos-2 -> TimesFM -> StatsForecast cascade produced a number is part of
+    what the number means, and it is what makes the fallback observable.
+    """
+
+    country_code: str
+    indicator_code: str
+    indicator_name: str | None = None
+    unit: str | None = None
+    frequency: str | None = None
+    model_used: str
+    horizon: int
+    points: list[ForecastPointOut]
+    cached: bool = False
+    generated_at: dt.datetime | None = None
+
+
+class NarrationOut(BaseModel):
+    """Grounded commentary on one series (feature 1.5).
+
+    `groundedness_score` describes *this text*: it is the verifier's verdict on the
+    string being returned, recorded when the text was generated and carried through
+    the cache with it. A cached narration therefore never arrives unverified.
+    """
+
+    country_code: str
+    indicator_code: str
+    text: str
+    provider: str
+    model: str
+    groundedness_score: float | None = None
+    cached: bool = False
+
+
 class HealthOut(BaseModel):
     status: str
     environment: str

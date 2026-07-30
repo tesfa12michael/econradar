@@ -2,9 +2,8 @@
 supabase/migrations/. The database is created and owned by those SQL migrations
 (never by ORM `create_all`); these classes exist only for queries and inserts.
 
-Only the tables Phase 1 code reads or writes are mapped. The remaining tables
-(anomalies, llm_cache, forecast_cache, embeddings) exist in SQL and are mapped
-when their features land (Phase 3).
+Every table in docs/architecture.md's schema outline is mapped: Phase 1 mapped the
+ingestion tables, Phase 3 added the AI ones (llm_cache, forecast_cache, embeddings).
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     Date,
@@ -25,8 +25,12 @@ from sqlalchemy import (
     Uuid,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+# Sentence-Transformers all-MiniLM-L6-v2 and Mistral Embed are both reduced to this
+# width so one pgvector column serves either provider — see decision #23.
+EMBEDDING_DIM = 384
 
 _UUID_PK = {"primary_key": True, "server_default": text("gen_random_uuid()")}
 _NOW = {"server_default": text("now()")}
@@ -150,3 +154,73 @@ class EtlError(Base):
     error_type: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
     occurred_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), **_NOW)
+
+
+class LlmCache(Base):
+    """Every LLM/VLM response, keyed by its inputs (feature 2.5).
+
+    `groundedness_score` is stored beside the text deliberately: a cached narration
+    must carry the verdict the verifier reached when it was generated, or a cache
+    hit would serve prose whose groundedness nobody has ever checked.
+    """
+
+    __tablename__ = "llm_cache"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, **_UUID_PK)
+    cache_key: Mapped[str] = mapped_column(Text, unique=True)
+    task_type: Mapped[str | None] = mapped_column(Text)
+    provider_used: Mapped[str | None] = mapped_column(Text)
+    model_used: Mapped[str | None] = mapped_column(Text)
+    response_text: Mapped[str | None] = mapped_column(Text)
+    groundedness_score: Mapped[float | None] = mapped_column(Numeric)
+    token_count: Mapped[int | None] = mapped_column(Integer)
+    cache_hit_count: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), **_NOW)
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ForecastCache(Base):
+    """A stored quantile forecast (features 1.4 and 2.5).
+
+    Also what keeps the Modal network hop off the request path — the scheduled job
+    writes here, and the API only ever reads.
+    """
+
+    __tablename__ = "forecast_cache"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, **_UUID_PK)
+    cache_key: Mapped[str] = mapped_column(Text, unique=True)
+    country_code: Mapped[str] = mapped_column(String(3))
+    indicator_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("indicators_catalog.id", ondelete="CASCADE")
+    )
+    model_used: Mapped[str | None] = mapped_column(Text)
+    forecast_horizon: Mapped[int | None] = mapped_column(Integer)
+    median_forecast: Mapped[list[float] | None] = mapped_column(ARRAY(Numeric))
+    lower_bound: Mapped[list[float] | None] = mapped_column(ARRAY(Numeric))
+    upper_bound: Mapped[list[float] | None] = mapped_column(ARRAY(Numeric))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), **_NOW)
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Embedding(Base):
+    """RAG corpus chunk + its vector (feature 2.2).
+
+    `chunk_text` is the retrieved evidence the answer must cite, so it holds the
+    already-formatted numbers rather than a reference to them — the LLM reads what
+    is in this column and nothing else.
+    """
+
+    __tablename__ = "embeddings"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, **_UUID_PK)
+    country_code: Mapped[str | None] = mapped_column(String(3))
+    indicator_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("indicators_catalog.id", ondelete="CASCADE")
+    )
+    chunk_text: Mapped[str] = mapped_column(Text)
+    chunk_type: Mapped[str | None] = mapped_column(Text)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
+    date_range_start: Mapped[dt.date | None] = mapped_column(Date)
+    date_range_end: Mapped[dt.date | None] = mapped_column(Date)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), **_NOW)

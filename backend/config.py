@@ -114,6 +114,64 @@ class Settings(BaseSettings):
     # left unflagged rather than flagged on noise.
     anomaly_min_observations: int = 8
 
+    # ── Forecasting (feature 1.4) ──
+    # Modal hosts Chronos-2 and TimesFM (decision #21); StatsForecast runs here
+    # (decision #22), which is what makes a Modal outage survivable.
+    modal_enabled: bool = True
+    modal_app_name: str = "econradar-forecast"
+    # A cold serverless GPU can take a while to answer; past this the cascade moves on
+    # rather than holding a scheduled job open.
+    modal_timeout_seconds: float = 420.0
+
+    # Horizon in *periods of the series' own frequency*, not a fixed number of months.
+    # A 12-month horizon on an annual series is a single step, which is not a forecast;
+    # 12 years ahead on one is not a defensible one either. Set per frequency instead.
+    forecast_horizon_monthly: int = 12
+    forecast_horizon_quarterly: int = 8
+    forecast_horizon_annual: int = 5
+    # Below this a series is refused rather than forecast — features.md 1.4's
+    # "a series too short for meaningful forecasting" edge case.
+    forecast_min_observations: int = 16
+    # Chronos-2 and TimesFM both cap their context; more history than this is trimmed
+    # to the most recent points rather than sent and silently truncated upstream.
+    forecast_max_context: int = 512
+    forecast_cache_ttl_days: int = 30
+    # Countries the scheduled forecast job covers, most-viewed first. Forecasting every
+    # (country, indicator) pair would be ~3,200 GPU calls a week for series nobody opens.
+    forecast_countries: tuple[str, ...] = Field(default=DEFAULT_FOCUS_COUNTRIES)
+
+    # ── LLM / VLM (features 1.5, 2.1, 2.2, 2.3) ──
+    llm_enabled: bool = True
+    # Model per provider. Names change on free tiers, so they are configuration.
+    mistral_model: str = "mistral-small-latest"
+    groq_model: str = "llama-3.3-70b-versatile"
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    gemini_model: str = "gemini-2.5-flash"
+    openrouter_vlm_model: str = "qwen/qwen3-vl-235b-a22b-instruct:free"
+    llm_timeout_seconds: float = 45.0
+    llm_max_tokens: int = 700
+    # Low but not zero: narration must stay close to the supplied numbers, and a
+    # temperature of 0 makes every country's prose read identically.
+    llm_temperature: float = 0.2
+    narration_cache_ttl_hours: int = 24
+    vlm_cache_ttl_days: int = 7
+    rag_cache_ttl_hours: int = 24
+
+    # Groundedness (decision #8). A narration whose score falls below this is not
+    # served — the fabricated number is the failure, so the response is.
+    groundedness_min_score: float = 1.0
+    # Rounding slack when matching a narrated number against the context: "3.4%" must
+    # match a stored 3.42, or the verifier fails honest prose. Relative tolerance.
+    groundedness_tolerance: float = 0.005
+
+    # ── RAG (feature 2.2) ──
+    rag_top_k: int = 8
+    # Retrieval below this cosine similarity is treated as "nothing relevant found",
+    # which triggers the insufficient-data refusal rather than a grounded-looking guess.
+    rag_min_similarity: float = 0.25
+    rag_context_turns: int = 4
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

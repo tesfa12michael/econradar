@@ -1,7 +1,7 @@
-# EconRadar backend — runtime dependencies (Phase 1)
-# Python 3.12 target (3.13 works locally). Heavy AI/ML deps (Chronos-2,
-# transformers, statsforecast, etc.) are deliberately NOT here yet — they
-# arrive in Phase 3 so the free-tier build stays small and fast.
+# EconRadar backend — runtime dependencies.
+# Python 3.12 target (3.13 works locally). The heavy forecasting weights
+# (Chronos-2, TimesFM) are NOT here: they live in the Modal image, never on the
+# 1 vCPU / 2 GB VPS — architecture decisions #21 and #22.
 
 fastapi>=0.115,<0.116
 uvicorn[standard]>=0.30,<0.35
@@ -30,3 +30,17 @@ APScheduler>=3.10,<4.0
 #     calls it via the SDK or over HTTP, so it is required either way.
 # The Chronos-2 weights themselves live in the Modal image, never on this box.
 modal>=1.5,<2
+
+# pgvector's SQLAlchemy types — maps the existing embeddings.embedding vector(384)
+# column (feature 2.2). Pure Python, no compiled extension. A hard import in
+# models.py, so it is a runtime dependency rather than a lazy one.
+pgvector>=0.3,<1
+
+# Nixtla StatsForecast — the last step of the forecasting cascade, and the ONLY one
+# that runs on this box (decision #22). Imported lazily inside the fallback path, so
+# numba/numpy cost nothing until Modal is actually unreachable.
+statsforecast>=2.0,<3
+
+# Jinja2 — LLM prompt templates (feature 1.5). Already present transitively via
+# FastAPI's ecosystem, declared here because prompts depend on it directly.
+jinja2>=3.1,<4

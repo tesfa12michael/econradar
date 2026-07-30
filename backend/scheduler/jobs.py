@@ -27,6 +27,7 @@ from connectors.base import BaseDataSourceConnector
 from db import get_session_factory
 from logging_config import get_logger
 from services import refresh_anomalies
+from services.forecast_store import refresh_forecasts
 
 logger = get_logger(__name__)
 
@@ -94,3 +95,23 @@ async def run_wb_databank_refresh() -> dict:
         start_period=settings.gem_start_period,
         end_period=settings.gem_end_period,
     )
+
+
+async def run_forecast_refresh() -> dict:
+    """Pre-compute forecasts for the covered countries (feature 1.4) — weekly.
+
+    The sixth job, and the first that is not an ingestion. It runs after the weekly
+    ingestions so it forecasts the freshest history, and it is what keeps the Modal
+    round trip off the request path: by the time anyone opens a profile page, the
+    forecast is already in `forecast_cache`.
+
+    Like the ingestion jobs it reports rather than raises — a Modal outage must
+    leave the scheduler running and the site serving cached forecasts.
+    """
+    try:
+        summary = await refresh_forecasts(get_session_factory())
+    except Exception as exc:
+        logger.exception("scheduled forecast refresh failed")
+        return {"job": "forecast", "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    logger.info("scheduled forecast refresh complete: %s", summary)
+    return {"job": "forecast", "status": "success", **summary}

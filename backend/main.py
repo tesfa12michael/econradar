@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db import dispose_engine
 from logging_config import configure_logging, get_logger
-from routers import data_router, health_router
+from routers import ai_router, data_router, health_router
 from scheduler import shutdown_scheduler, start_scheduler
 
 logger = get_logger(__name__)
@@ -52,9 +52,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Health + sanitized status at the root; data API under /api/v1.
+# Health + sanitized status at the root; data and intelligence APIs under /api/v1.
 app.include_router(health_router)
 app.include_router(data_router, prefix=settings.api_v1_prefix)
+app.include_router(ai_router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/", tags=["meta"])
