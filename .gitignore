@@ -9,6 +9,13 @@
 *.pem
 *.key
 
+# Modal credentials. `modal token set` writes ~/.modal.toml, and the VPS runs the app as
+# a system user whose home may be /opt/econradar — i.e. this working tree. Ignored here so
+# an auth flow on the box can never stage a token into a public repo. Prefer the
+# MODAL_TOKEN_ID / MODAL_TOKEN_SECRET env vars, which take precedence over this file.
+.modal.toml
+modal.toml
+
 # ── Python (backend) ──
 __pycache__/
 *.py[cod]
