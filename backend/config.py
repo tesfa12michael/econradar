@@ -187,6 +187,12 @@ class Settings(BaseSettings):
     # and picks the forecast up on a later request, which is the behaviour that
     # keeps a cold GPU off the page-load path.
     forecast_borrow_wait_seconds: float = 25.0
+    # How long to wait for the forecast panel's request to *register* before giving
+    # up on borrowing. The four panels are fired together by the browser, so which
+    # one reaches its cache check first is decided by a couple of database round
+    # trips — without this grace period the borrow loses that race routinely, and
+    # narration caches a version with no forecast that the next visitor supersedes.
+    forecast_borrow_appear_seconds: float = 3.0
 
     # Groundedness (decision #8). A narration whose score falls below this is not
     # served — the fabricated number is the failure, so the response is.

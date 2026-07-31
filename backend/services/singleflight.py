@@ -67,17 +67,30 @@ async def run[T](key: str, factory: Callable[[], Awaitable[T]]) -> T:
             _in_flight.pop(key, None)
 
 
-async def await_in_flight(key: str, *, timeout: float) -> Any | None:
-    """Wait for an already-running computation, or return None immediately.
+async def await_in_flight(key: str, *, timeout: float, appear_within: float = 0.0) -> Any | None:
+    """Wait for an already-running computation, or return None.
 
     This is the half of single-flight that lets one panel benefit from another's
     work **without ever starting that work itself**. Narration wants the forecast
     the forecast panel is computing at that moment; it does not want to trigger a
     cold GPU call of its own if nobody asked for one (decision #31).
+
+    `appear_within` exists because checking once loses a race that happens on every
+    real page load. The browser fires all four panels together, and whether the
+    forecast has registered its task by the time narration looks is a coin toss
+    decided by two database round trips. Observed live on a cold country: the
+    forecast computed, narration missed it, and narration cached a version with no
+    forecast that the next visitor would immediately supersede. A short grace period
+    for the task to *appear* costs nothing when nobody is computing.
     """
-    task = _in_flight.get(key)
-    if task is None or task.done():
-        return None
+    deadline = asyncio.get_running_loop().time() + appear_within
+    while True:
+        task = _in_flight.get(key)
+        if task is not None and not task.done():
+            break
+        if asyncio.get_running_loop().time() >= deadline:
+            return None
+        await asyncio.sleep(0.05)
     try:
         return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
     except TimeoutError:

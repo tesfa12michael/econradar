@@ -99,3 +99,38 @@ def test_the_cache_key_carries_the_prompt_revision():
         assert cache.build_cache_key("narration", country="BRA", indicator="CBPOL") != before
     finally:
         cache.PROMPT_REVISION = original
+
+
+async def test_borrowing_waits_briefly_for_the_task_to_appear():
+    """The race this closes was live, not hypothetical.
+
+    All four panels are fired together by the browser, so whether the forecast has
+    registered its task by the time narration looks is decided by a couple of
+    database round trips. Checking once loses that race routinely — observed on a
+    cold country: the forecast computed, narration missed it and cached a version
+    with no forecast that the very next visitor would supersede.
+    """
+    from services import singleflight
+
+    async def slow():
+        await asyncio.sleep(0.05)
+        return "forecast"
+
+    async def start_late():
+        await asyncio.sleep(0.08)  # registers *after* the borrower first looks
+        return await singleflight.run("late", slow)
+
+    owner = asyncio.create_task(start_late())
+    borrowed = await singleflight.await_in_flight("late", timeout=2.0, appear_within=1.0)
+    assert borrowed == "forecast"
+    await owner
+
+
+async def test_borrowing_still_gives_up_when_nobody_is_computing():
+    """The grace period must not become a stall on a series nobody asked about."""
+    from services import singleflight
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    assert await singleflight.await_in_flight("nobody", timeout=5.0, appear_within=0.2) is None
+    assert loop.time() - started < 1.0

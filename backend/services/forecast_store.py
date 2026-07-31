@@ -194,7 +194,11 @@ async def get_forecast(
         # generation of every panel that mentions it; starting one here would put a
         # cold GPU on a path that is explicitly not allowed to.
         if (
-            await singleflight.await_in_flight(key, timeout=settings.forecast_borrow_wait_seconds)
+            await singleflight.await_in_flight(
+                key,
+                timeout=settings.forecast_borrow_wait_seconds,
+                appear_within=settings.forecast_borrow_appear_seconds,
+            )
             is not None
         ):
             borrowed = await get_cached_forecast(session, key)
