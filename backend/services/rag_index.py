@@ -217,6 +217,10 @@ async def _previous_observations(
     flagged as a drop invites "a drop of 70.8%", when the truth is a fall from
     15,406% the month before. One correlated lookup per anomaly would be ~6,400
     round trips, so the window function does it in a single query.
+
+    The result is filtered back down to the anomaly dates **in SQL**. Postgres has
+    to walk each partition to compute the lag either way, but returning the whole
+    walk would hand ~200,000 rows to a 2 GB box to keep 6,400 of them.
     """
     if not keys:
         return {}
@@ -248,7 +252,17 @@ async def _previous_observations(
         )
         .subquery()
     )
-    rows = (await session.execute(select(previous).where(previous.c.prev_value.is_not(None)))).all()
+    rows = (
+        await session.execute(
+            select(previous)
+            .where(previous.c.prev_value.is_not(None))
+            .where(
+                tuple_(previous.c.country_code, previous.c.indicator_id, previous.c.date).in_(
+                    list(keys)
+                )
+            )
+        )
+    ).all()
     return {
         (r.country_code, r.indicator_id, r.date): (r.prev_date, float(r.prev_value)) for r in rows
     }
