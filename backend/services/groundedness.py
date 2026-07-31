@@ -10,6 +10,13 @@ a narration containing one is not served.
 mis-rounded, or computed for itself (a growth rate, a difference, an average that
 was not supplied).
 
+**What it could never catch on its own**, and what `services/semantics.py` was
+added to catch beside it (decisions #32-#34): a figure copied perfectly and then
+*read wrong* — a spike described as a drop, a level presented as the size of a
+change, a hyperinflation-era rate quoted as though it sat on today's scale. Those
+answers score 1.00 here and are false. `verify()` therefore runs both and requires
+both; see `GroundednessReport.passed`.
+
 **What it deliberately does not do:** it does not repair. A response that fails is
 discarded and the next provider is tried, because silently editing a model's prose
 to match the data would make the verifier's own output unverifiable.
@@ -33,6 +40,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config import settings
+from services.semantics import SemanticReport, check_semantics
 
 # Digit-bearing figures only. Thousands separators and a leading sign are consumed
 # so "$1,234.5" and "-2.1%" each yield one number rather than three.
@@ -67,11 +75,20 @@ class GroundednessReport:
     total_numbers: int
     ungrounded: tuple[str, ...] = ()
     approximations: tuple[str, ...] = ()
+    semantic: SemanticReport = field(default_factory=SemanticReport)
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
-        return self.score >= settings.groundedness_min_score
+        """Both disciplines, not either.
+
+        A response that copies every figure correctly and then says the rate fell
+        when the evidence says it rose is worse than one that fumbles a decimal: it
+        is wrong in a way the reader has no way to detect. So the semantic report
+        is a veto, not a score adjustment — mixing it into `score` would let a long
+        answer average a contradiction away.
+        """
+        return self.score >= settings.groundedness_min_score and self.semantic.passed
 
     def reason(self) -> str:
         parts = []
@@ -79,6 +96,8 @@ class GroundednessReport:
             parts.append("numbers absent from context: " + ", ".join(self.ungrounded))
         if self.approximations:
             parts.append("approximation terms: " + ", ".join(self.approximations))
+        if not self.semantic.passed:
+            parts.append(self.semantic.reason())
         return "; ".join(parts) or "grounded"
 
 
@@ -174,11 +193,21 @@ def verify(text: str, context: Any, *, tolerance: float | None = None) -> Ground
     lowered = text.lower()
     approximations = tuple(term for term in APPROXIMATION_TERMS if term in lowered)
 
+    # Meaning, not just arithmetic (decisions #32-#34). Run even when there are no
+    # numbers to score: prose can still describe a rise as a fall.
+    semantic = (
+        check_semantics(text, context, tolerance=tol)
+        if settings.semantic_checks_enabled
+        else SemanticReport()
+    )
+
     if not numbers:
         # Prose with no figures cannot fabricate one. It is trivially grounded — but
         # an approximation term is still a numeric claim, so it still fails.
         score = 0.0 if approximations else 1.0
-        return GroundednessReport(score=score, total_numbers=0, approximations=approximations)
+        return GroundednessReport(
+            score=score, total_numbers=0, approximations=approximations, semantic=semantic
+        )
 
     grounded = len(numbers) - len(ungrounded)
     score = grounded / len(numbers)
@@ -189,4 +218,5 @@ def verify(text: str, context: Any, *, tolerance: float | None = None) -> Ground
         total_numbers=len(numbers),
         ungrounded=ungrounded,
         approximations=approximations,
+        semantic=semantic,
     )

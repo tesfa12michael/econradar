@@ -27,7 +27,7 @@ import datetime as dt
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -35,6 +35,7 @@ from logging_config import get_logger
 from models import Anomaly, CountryProfile, DataSource, Embedding, IndicatorCatalog, TimeSeries
 from services.context import fmt
 from services.embeddings import EmbeddingUnavailable, embed_texts
+from services.semantics import is_extreme
 
 logger = get_logger(__name__)
 
@@ -134,7 +135,8 @@ async def build_data_snapshots(session: AsyncSession) -> list[Chunk]:
             f"Most recent value: {fmt(latest_value)}{suffix} in {latest_date.isoformat()}. "
             f"Record covers {r.n} {r.frequency or 'periodic'} observations from "
             f"{r.first_date.isoformat()} to {r.last_date.isoformat()}, ranging from a low of "
-            f"{fmt(float(r.min_value))}{suffix} to a high of {fmt(float(r.max_value))}{suffix}. "
+            f"{fmt(float(r.min_value))}{suffix} to a high of {fmt(float(r.max_value))}{suffix}."
+            f"{regime_note([float(r.min_value), float(r.max_value)], r.unit)} "
             f"Region: {r.region or 'unclassified'}. Source: {r.source}. "
             f"Indicator code: {r.indicator_code}."
         )
@@ -188,6 +190,90 @@ async def build_country_profiles(session: AsyncSession) -> list[Chunk]:
     return chunks
 
 
+def regime_note(values: list[float | None], unit: str | None) -> str:
+    """A sentence placing extraordinary percentages in their own monetary regime.
+
+    Decision #34. Brazil's policy rate maxes at 355,086% — a real stored value, a
+    nominal annualised rate under a currency that no longer exists. Retrieved on its
+    own it reads as a fact about interest rates, and an answering model has nothing
+    in the chunk to tell it otherwise. Now it does, in the chunk itself, because the
+    model can only be as careful as its evidence.
+    """
+    if not any(is_extreme(v, unit) for v in values):
+        return ""
+    return (
+        " Figures of this magnitude are nominal annualised rates from a "
+        "hyperinflation era and are not comparable with post-stabilisation levels; "
+        "the currency and monetary regime of that period differ from today's."
+    )
+
+
+async def _previous_observations(
+    session: AsyncSession, keys: list[tuple[str, uuid.UUID, dt.date]]
+) -> dict[tuple[str, uuid.UUID, dt.date], tuple[dt.date, float]]:
+    """The observation immediately before each anomaly, in one pass.
+
+    An anomaly without the value it moved *from* is the whole Brazil failure: 70.8%
+    flagged as a drop invites "a drop of 70.8%", when the truth is a fall from
+    15,406% the month before. One correlated lookup per anomaly would be ~6,400
+    round trips, so the window function does it in a single query.
+    """
+    if not keys:
+        return {}
+    wanted = {(c, i) for c, i, _ in keys}
+    previous = (
+        select(
+            TimeSeries.country_code,
+            TimeSeries.indicator_id,
+            TimeSeries.date,
+            TimeSeries.value,
+            func.lag(TimeSeries.date)
+            .over(
+                partition_by=(TimeSeries.country_code, TimeSeries.indicator_id),
+                order_by=TimeSeries.date,
+            )
+            .label("prev_date"),
+            func.lag(TimeSeries.value)
+            .over(
+                partition_by=(TimeSeries.country_code, TimeSeries.indicator_id),
+                order_by=TimeSeries.date,
+            )
+            .label("prev_value"),
+        )
+        .where(TimeSeries.value.is_not(None))
+        .where(
+            tuple_(TimeSeries.country_code, TimeSeries.indicator_id).in_(
+                [(c, i) for c, i in wanted]
+            )
+        )
+        .subquery()
+    )
+    rows = (await session.execute(select(previous).where(previous.c.prev_value.is_not(None)))).all()
+    return {
+        (r.country_code, r.indicator_id, r.date): (r.prev_date, float(r.prev_value)) for r in rows
+    }
+
+
+async def _series_coverage(
+    session: AsyncSession,
+) -> dict[tuple[str, uuid.UUID], tuple[int, dt.date, dt.date]]:
+    """Observation count and span per series, so a chunk can state its own coverage."""
+    rows = (
+        await session.execute(
+            select(
+                TimeSeries.country_code,
+                TimeSeries.indicator_id,
+                func.count().label("n"),
+                func.min(TimeSeries.date).label("first_date"),
+                func.max(TimeSeries.date).label("last_date"),
+            )
+            .where(TimeSeries.value.is_not(None))
+            .group_by(TimeSeries.country_code, TimeSeries.indicator_id)
+        )
+    ).all()
+    return {(r.country_code, r.indicator_id): (r.n, r.first_date, r.last_date) for r in rows}
+
+
 async def build_anomaly_contexts(session: AsyncSession) -> list[Chunk]:
     """The most extreme flagged observation(s) per series."""
     ranked = (
@@ -227,6 +313,11 @@ async def build_anomaly_contexts(session: AsyncSession) -> list[Chunk]:
         )
     ).all()
 
+    previous = await _previous_observations(
+        session, [(r.country_code, r.indicator_id, r.date) for r in rows]
+    )
+    coverage = await _series_coverage(session)
+
     chunks: list[Chunk] = []
     for r in rows:
         suffix = _suffix(r.unit)
@@ -238,10 +329,44 @@ async def build_anomaly_contexts(session: AsyncSession) -> list[Chunk]:
             # otherwise would put a number in the corpus that is not a measurement.
             else "classified as a structural break, for which a Z-score is undefined"
         )
+        value = float(r.value) if r.value is not None else None
+        prior = previous.get((r.country_code, r.indicator_id, r.date))
+
+        # The transition, in the one phrasing `services/semantics.py` parses. Stating
+        # what the value moved *from* is what stops a level being read as a change:
+        # "70.8%, flagged as a drop" becomes "fell from 15,406% to 70.8%".
+        if prior is not None and value is not None:
+            prev_date, prev_value = prior
+            direction = "fell" if value < prev_value else "rose"
+            movement = (
+                f"{direction} from {fmt(prev_value)}{suffix} in {prev_date.isoformat()} "
+                f"to {fmt(value)}{suffix} in {r.date.isoformat()}, "
+                f"a {'fall' if direction == 'fell' else 'rise'} of "
+                f"{fmt(abs(value - prev_value))}"
+                f"{' percentage points' if r.unit == '%' else f' {r.unit}' if r.unit else ''}"
+            )
+        else:
+            movement = (
+                f"was {fmt(value) if value is not None else 'unrecorded'}{suffix} "
+                f"in {r.date.isoformat()} (no earlier observation to compare against)"
+            )
+
+        span = coverage.get((r.country_code, r.indicator_id))
+        # Coverage travels with the anomaly so a question answered from anomaly
+        # chunks alone cannot conclude the record is thin. It is the retrieval that
+        # is narrow, not the data, and the model has no other way to tell them apart.
+        coverage_phrase = (
+            f" The full series holds {span[0]} observations from "
+            f"{span[1].isoformat()} to {span[2].isoformat()}."
+            if span
+            else ""
+        )
+
         text = (
-            f"Anomaly: {name} ({r.country_code}) — {r.indicator_name} was "
-            f"{fmt(float(r.value)) if r.value is not None else 'unrecorded'}{suffix} "
-            f"in {r.date.isoformat()}, flagged as a {r.deviation_type or 'anomaly'}, {z_phrase}. "
+            f"Anomaly: {name} ({r.country_code}) — {r.indicator_name} {movement}. "
+            f"Flagged as a {r.deviation_type or 'anomaly'}, {z_phrase}."
+            f"{coverage_phrase}"
+            f"{regime_note([value, prior[1] if prior else None], r.unit)} "
             f"Indicator code: {r.indicator_code}."
         )
         chunks.append(

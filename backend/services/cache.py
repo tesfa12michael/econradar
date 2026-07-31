@@ -62,7 +62,9 @@ TASK_RAG_ANSWER = "rag_answer"
 #: regeneration of countries nobody opens.
 #:
 #: 1 — Phase 3 as shipped.
-PROMPT_REVISION = 1
+#: 2 — decisions #32-#34: anomalies carry their transition, direction words are
+#:     verified against the evidence, extreme values must be qualified.
+PROMPT_REVISION = 2
 
 
 def ttl_for(task_type: str) -> dt.timedelta:

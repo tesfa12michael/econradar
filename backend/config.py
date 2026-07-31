@@ -194,6 +194,16 @@ class Settings(BaseSettings):
     # Rounding slack when matching a narrated number against the context: "3.4%" must
     # match a stored 3.42, or the verifier fails honest prose. Relative tolerance.
     groundedness_tolerance: float = 0.005
+    # Above this, a percentage is not a rate a reader can put beside today's numbers
+    # — it is a hyperinflation-era nominal figure, usually from a currency that no
+    # longer exists (Brazil's policy rate peaks at 355,086%). Quoting one without a
+    # qualifier is decision #34's failure, so the threshold is where "extraordinary"
+    # becomes "not on the same axis", not where "high" begins.
+    extreme_percent_threshold: float = 1000.0
+    # Interpretation checks (decisions #32-#34) on top of the numeric verifier.
+    # Separately switchable because they reject text the numeric check accepts, and
+    # a bad rule here would silently suppress correct answers.
+    semantic_checks_enabled: bool = True
 
     # ── RAG (feature 2.2) ──
     rag_top_k: int = 8

@@ -120,15 +120,33 @@ async def load_series_context(
                 .limit(ANOMALY_LIMIT)
             )
         ).all()
-        anomalies = [
-            {
-                "date": a.date.isoformat(),
-                "value": fmt(float(a.value)) if a.value is not None else None,
-                "z_score": fmt(float(a.z_score)) if a.z_score is not None else None,
-                "deviation_type": a.deviation_type or "anomaly",
-            }
-            for a in anomaly_rows
-        ]
+        # The value each anomaly moved *from*, taken from the series already loaded
+        # rather than re-queried. Without it an anomaly is a bare level with a
+        # direction word attached, which is precisely how "70.8%, flagged as a drop"
+        # became "a drop of 70.8%" (decision #32).
+        by_date = dict(observations)
+        ordered = [d for d, _ in observations]
+        anomalies = []
+        for a in anomaly_rows:
+            value = float(a.value) if a.value is not None else None
+            index = ordered.index(a.date) if a.date in by_date else None
+            prev_date = ordered[index - 1] if index else None
+            prev_value = by_date.get(prev_date) if prev_date else None
+            anomalies.append(
+                {
+                    "date": a.date.isoformat(),
+                    "value": fmt(value),
+                    "z_score": fmt(float(a.z_score)) if a.z_score is not None else None,
+                    "deviation_type": a.deviation_type or "anomaly",
+                    "previous_date": prev_date.isoformat() if prev_date else None,
+                    "previous_value": fmt(prev_value) if prev_value is not None else None,
+                    "change_from_previous": (
+                        f"{fmt(value - prev_value):+g}"
+                        if value is not None and prev_value is not None
+                        else None
+                    ),
+                }
+            )
 
     payload = _assemble(
         country_code=country_code,
