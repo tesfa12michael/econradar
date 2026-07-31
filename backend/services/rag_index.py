@@ -26,8 +26,9 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
-from sqlalchemy import desc, func, select, tuple_
+from sqlalchemy import desc, func, select, true
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -209,62 +210,50 @@ def regime_note(values: list[float | None], unit: str | None) -> str:
 
 
 async def _previous_observations(
-    session: AsyncSession, keys: list[tuple[str, uuid.UUID, dt.date]]
+    session: AsyncSession, anchor: Any
 ) -> dict[tuple[str, uuid.UUID, dt.date], tuple[dt.date, float]]:
-    """The observation immediately before each anomaly, in one pass.
+    """The observation immediately before each anomaly, by lateral join.
 
     An anomaly without the value it moved *from* is the whole Brazil failure: 70.8%
     flagged as a drop invites "a drop of 70.8%", when the truth is a fall from
-    15,406% the month before. One correlated lookup per anomaly would be ~6,400
-    round trips, so the window function does it in a single query.
+    15,406% the month before.
 
-    The result is filtered back down to the anomaly dates **in SQL**. Postgres has
-    to walk each partition to compute the lag either way, but returning the whole
-    walk would hand ~200,000 rows to a 2 GB box to keep 6,400 of them.
+    Two shapes were tried and abandoned first, both against live data. A `lag()`
+    window over every partition containing an anomaly computes ~200,000 rows to keep
+    ~6,400 of them; filtering that back down needs a tuple `IN` list of 6,400
+    triples, and the list is itself slower than the scan it was meant to avoid —
+    the rebuild sat in query planning long enough to look hung. A lateral does
+    ~6,400 index seeks against `time_series_natural_key (country_code,
+    indicator_id, date)`, which exists on every partition, and sends no list at all.
+
+    `anchor` is the already-ranked anomaly selectable, so the driving rows stay in
+    the database rather than making a round trip through Python.
     """
-    if not keys:
-        return {}
-    wanted = {(c, i) for c, i, _ in keys}
-    previous = (
-        select(
-            TimeSeries.country_code,
-            TimeSeries.indicator_id,
-            TimeSeries.date,
-            TimeSeries.value,
-            func.lag(TimeSeries.date)
-            .over(
-                partition_by=(TimeSeries.country_code, TimeSeries.indicator_id),
-                order_by=TimeSeries.date,
-            )
-            .label("prev_date"),
-            func.lag(TimeSeries.value)
-            .over(
-                partition_by=(TimeSeries.country_code, TimeSeries.indicator_id),
-                order_by=TimeSeries.date,
-            )
-            .label("prev_value"),
-        )
+    prior = (
+        select(TimeSeries.date.label("prev_date"), TimeSeries.value.label("prev_value"))
+        .where(TimeSeries.country_code == anchor.c.country_code)
+        .where(TimeSeries.indicator_id == anchor.c.indicator_id)
+        .where(TimeSeries.date < anchor.c.date)
         .where(TimeSeries.value.is_not(None))
-        .where(
-            tuple_(TimeSeries.country_code, TimeSeries.indicator_id).in_(
-                [(c, i) for c, i in wanted]
-            )
-        )
-        .subquery()
+        .order_by(TimeSeries.date.desc())
+        .limit(1)
+        .lateral("prior")
     )
     rows = (
         await session.execute(
-            select(previous)
-            .where(previous.c.prev_value.is_not(None))
-            .where(
-                tuple_(previous.c.country_code, previous.c.indicator_id, previous.c.date).in_(
-                    list(keys)
-                )
-            )
+            select(
+                anchor.c.country_code,
+                anchor.c.indicator_id,
+                anchor.c.date,
+                prior.c.prev_date,
+                prior.c.prev_value,
+            ).select_from(anchor.join(prior, true()))
         )
     ).all()
     return {
-        (r.country_code, r.indicator_id, r.date): (r.prev_date, float(r.prev_value)) for r in rows
+        (r.country_code, r.indicator_id, r.date): (r.prev_date, float(r.prev_value))
+        for r in rows
+        if r.prev_value is not None
     }
 
 
@@ -327,9 +316,12 @@ async def build_anomaly_contexts(session: AsyncSession) -> list[Chunk]:
         )
     ).all()
 
-    previous = await _previous_observations(
-        session, [(r.country_code, r.indicator_id, r.date) for r in rows]
+    anchor = (
+        select(ranked.c.country_code, ranked.c.indicator_id, ranked.c.date)
+        .where(ranked.c.rank <= ANOMALIES_PER_SERIES)
+        .subquery("anchor")
     )
+    previous = await _previous_observations(session, anchor)
     coverage = await _series_coverage(session)
 
     chunks: list[Chunk] = []
