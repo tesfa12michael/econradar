@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
+from db import get_session_factory
 from logging_config import get_logger
-from services import prompts
+from services import prompts, singleflight
 from services.cache import (
     TASK_NARRATION,
     build_cache_key,
@@ -88,45 +89,55 @@ async def narrate_series(
             cached=True,
         )
 
-    user_prompt = prompts.render(
-        "narration.j2", min_words=MIN_WORDS, max_words=MAX_WORDS, **payload
-    )
-    llm = service or LLMService()
-    try:
-        completion = await llm.narrate(prompts.chat_messages(user_prompt), context=payload)
-    except NarrationUnavailable as exc:
-        # Nothing is stored and nothing is invented: the panel reports that narration
-        # is unavailable, which is true, rather than showing text nobody verified.
-        logger.warning("narration unavailable for %s/%s: %s", country_code, indicator_code, exc)
-        return None
+    async def generate() -> Narration | None:
+        """One generation per key, shared by every concurrent caller (decision #31).
 
-    await store_response(
-        session,
-        cache_key=key,
-        task_type=TASK_NARRATION,
-        response_text=completion.text,
-        provider=completion.provider,
-        model=completion.model,
-        groundedness_score=completion.groundedness.score,
-        token_count=completion.token_count,
-    )
-    logger.info(
-        "narration generated: %s/%s provider=%s groundedness=%.2f numbers=%d",
-        country_code,
-        indicator_code,
-        completion.provider,
-        completion.groundedness.score,
-        completion.groundedness.total_numbers,
-    )
-    return Narration(
-        country_code=country_code,
-        indicator_code=indicator_code,
-        text=completion.text,
-        provider=completion.provider,
-        model=completion.model,
-        groundedness_score=completion.groundedness.score,
-        cached=False,
-    )
+        Writes through a session of its own: the callers waiting on this are each
+        holding their own, and an `AsyncSession` is not safe to share between tasks.
+        """
+        user_prompt = prompts.render(
+            "narration.j2", min_words=MIN_WORDS, max_words=MAX_WORDS, **payload
+        )
+        llm = service or LLMService()
+        try:
+            completion = await llm.narrate(prompts.chat_messages(user_prompt), context=payload)
+        except NarrationUnavailable as exc:
+            # Nothing is stored and nothing is invented: the panel reports that
+            # narration is unavailable, which is true, rather than showing text
+            # nobody verified.
+            logger.warning("narration unavailable for %s/%s: %s", country_code, indicator_code, exc)
+            return None
+
+        async with get_session_factory()() as own:
+            await store_response(
+                own,
+                cache_key=key,
+                task_type=TASK_NARRATION,
+                response_text=completion.text,
+                provider=completion.provider,
+                model=completion.model,
+                groundedness_score=completion.groundedness.score,
+                token_count=completion.token_count,
+            )
+        logger.info(
+            "narration generated: %s/%s provider=%s groundedness=%.2f numbers=%d",
+            country_code,
+            indicator_code,
+            completion.provider,
+            completion.groundedness.score,
+            completion.groundedness.total_numbers,
+        )
+        return Narration(
+            country_code=country_code,
+            indicator_code=indicator_code,
+            text=completion.text,
+            provider=completion.provider,
+            model=completion.model,
+            groundedness_score=completion.groundedness.score,
+            cached=False,
+        )
+
+    return await singleflight.run(key, generate)
 
 
 def narration_enabled() -> bool:

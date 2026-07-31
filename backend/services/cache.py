@@ -15,9 +15,18 @@ readable prefix (task type, country, indicator) for human inspection and
 component. Adding a component later changes every key rather than silently colliding
 with the old ones.
 
-**TTL** is per task type, from settings, and enforced in SQL rather than in Python:
-an expired row is simply not selected, so a clock skew or a missed sweep can never
-serve stale text.
+**Invalidation is content-addressed, not time-based** (decision #31). Every key
+already digests the inputs that determine the answer — the last observation, the
+observation count, the anomaly count, the forecast model. If the key matches, the
+inputs are identical, so regenerating would spend a provider call to obtain the
+text already stored. A short TTL therefore buys no freshness whatsoever; it only
+buys the same answer again. When the data moves, the key moves with it, and the
+next visitor to that country regenerates exactly once.
+
+What a TTL is still good for is the one input the key cannot see: *this code*. A
+better prompt or a stricter verifier should reach existing entries. That is what
+`PROMPT_REVISION` does, deterministically and immediately, and what
+`ai_cache_max_age_days` does as a slow backstop for everything else.
 """
 
 from __future__ import annotations
@@ -46,15 +55,26 @@ TASK_VLM_INTERPRETATION = "vlm_interpretation"
 TASK_RAG_ANSWER = "rag_answer"
 
 
+#: Bump when a prompt template, the context builder, or the verifier changes in a
+#: way that should reach text already generated. It is part of every cache key, so
+#: incrementing it retires the whole cache atomically and the replacements are
+#: generated lazily, by the first visitor to each country — no sweep, no
+#: regeneration of countries nobody opens.
+#:
+#: 1 — Phase 3 as shipped.
+PROMPT_REVISION = 1
+
+
 def ttl_for(task_type: str) -> dt.timedelta:
-    """TTL for a task type. Read through settings each call so a config change
-    takes effect on restart without this module caching a stale value."""
-    return {
-        TASK_NARRATION: dt.timedelta(hours=settings.narration_cache_ttl_hours),
-        TASK_ANOMALY_EXPLANATION: dt.timedelta(hours=settings.narration_cache_ttl_hours),
-        TASK_VLM_INTERPRETATION: dt.timedelta(days=settings.vlm_cache_ttl_days),
-        TASK_RAG_ANSWER: dt.timedelta(hours=settings.rag_cache_ttl_hours),
-    }.get(task_type, dt.timedelta(hours=settings.narration_cache_ttl_hours))
+    """The safety-net age for a cached response.
+
+    Uniform across task types, because with content-addressed keys the reason an
+    entry should ever expire is the same for all of them: something changed in
+    this repository that `PROMPT_REVISION` was not bumped for. Freshness of the
+    *data* is handled by the key, not by the clock.
+    """
+    del task_type  # kept in the signature: callers pass it, and it reads as intent
+    return dt.timedelta(days=settings.ai_cache_max_age_days)
 
 
 def _slug(value: Any) -> str:
@@ -73,7 +93,7 @@ def build_cache_key(task_type: str, /, **parts: Any) -> str:
     'narration:NGA:FP.CPI.TOTL.ZG:...'
     """
     canonical = json.dumps(
-        {"task": task_type, **{k: parts[k] for k in sorted(parts)}},
+        {"task": task_type, "rev": PROMPT_REVISION, **{k: parts[k] for k in sorted(parts)}},
         sort_keys=True,
         separators=(",", ":"),
         default=str,
@@ -258,6 +278,29 @@ async def invalidate(session: AsyncSession, *, key_prefix: str) -> int:
         removed += result.rowcount or 0
     await session.commit()
     logger.info("cache invalidated: prefix=%r removed=%d", key_prefix, removed)
+    return removed
+
+
+async def prune_expired(session: AsyncSession) -> int:
+    """Delete rows past their safety-net age.
+
+    Content-addressed keys mean a superseded entry is never *served* again — the
+    lookup simply misses — but it is still stored. Nothing reclaims that on its
+    own, so the scheduled jobs call this.
+
+    Only expired rows are deleted, not "superseded" ones. Detecting supersession
+    would mean keeping the newest key per (task, country, indicator) prefix, and
+    that is wrong for `anomaly_explanation`, which legitimately holds one entry per
+    anomaly under the same prefix. Age is the honest criterion; at ~1 KB a row the
+    accumulation between sweeps is not material against a 500 MB budget.
+    """
+    removed = 0
+    for table in (LlmCache, ForecastCache):
+        result = await session.execute(delete(table).where(table.expires_at < func.now()))
+        removed += result.rowcount or 0
+    await session.commit()
+    if removed:
+        logger.info("cache prune: removed %d expired rows", removed)
     return removed
 
 

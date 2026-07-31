@@ -16,13 +16,16 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import settings
+from db import get_session_factory
 from logging_config import get_logger
 from models import DataSource, IndicatorCatalog, TimeSeries
+from services import singleflight
 from services.cache import build_cache_key, get_cached_forecast, store_forecast
 from services.forecasting import (
     ForecastingService,
@@ -164,8 +167,7 @@ async def get_forecast(
     last_date = history[-1][0]
     key = forecast_cache_key(country_code, indicator_code, last_date, len(history), horizon)
 
-    cached = await get_cached_forecast(session, key)
-    if cached is not None:
+    def assemble_cached(entry: Any) -> Forecast:
         return _assemble(
             country_code,
             indicator_code,
@@ -173,39 +175,76 @@ async def get_forecast(
             unit,
             frequency,
             last_date,
-            cached.model_used or "unknown",
-            cached.median,
-            cached.lower,
-            cached.upper,
+            entry.model_used or "unknown",
+            entry.median,
+            entry.lower,
+            entry.upper,
             cached=True,
-            generated_at=cached.created_at,
+            generated_at=entry.created_at,
         )
 
+    cached = await get_cached_forecast(session, key)
+    if cached is not None:
+        return assemble_cached(cached)
+
     if not allow_compute:
+        # Borrow, never start (decision #31). The narration and chart-analysis panels
+        # arrive at the same moment as the forecast panel and want the same forecast.
+        # Waiting for one already in flight costs nothing and saves a second
+        # generation of every panel that mentions it; starting one here would put a
+        # cold GPU on a path that is explicitly not allowed to.
+        if (
+            await singleflight.await_in_flight(key, timeout=settings.forecast_borrow_wait_seconds)
+            is not None
+        ):
+            borrowed = await get_cached_forecast(session, key)
+            if borrowed is not None:
+                logger.info("forecast borrowed from an in-flight computation: %s", key)
+                return assemble_cached(borrowed)
         return None
 
     svc = service or ForecastingService()
-    try:
-        result = await svc.predict(
-            [v for _, v in history],
-            horizon=horizon,
-            seasonality=seasonality_for(frequency),
-        )
-    except ForecastUnavailable as exc:
-        logger.warning("forecast unavailable for %s/%s: %s", country_code, indicator_code, exc)
+    history_values = [v for _, v in history]
+
+    async def compute_and_store() -> bool:
+        """Own the computation and the write, on a session of its own.
+
+        A single `AsyncSession` cannot be shared between concurrent tasks, and the
+        whole point here is that several requests are waiting. So the winner writes
+        through its own session and every caller — winner included — re-reads the
+        row afterwards.
+        """
+        try:
+            result = await svc.predict(
+                history_values, horizon=horizon, seasonality=seasonality_for(frequency)
+            )
+        except ForecastUnavailable as exc:
+            logger.warning("forecast unavailable for %s/%s: %s", country_code, indicator_code, exc)
+            return False
+        async with get_session_factory()() as own:
+            await store_forecast(
+                own,
+                cache_key=key,
+                country_code=country_code,
+                indicator_id=indicator_id,
+                model_used=result.model_used,
+                horizon=horizon,
+                median=result.median,
+                lower=result.lower,
+                upper=result.upper,
+            )
+        return True
+
+    produced = await singleflight.run(key, compute_and_store)
+    if not produced:
         return None
 
-    await store_forecast(
-        session,
-        cache_key=key,
-        country_code=country_code,
-        indicator_id=indicator_id,
-        model_used=result.model_used,
-        horizon=horizon,
-        median=result.median,
-        lower=result.lower,
-        upper=result.upper,
-    )
+    stored = await get_cached_forecast(session, key)
+    if stored is None:
+        # Written and immediately not readable would mean the row was pruned or the
+        # write rolled back; either way there is nothing to serve.
+        logger.error("forecast stored but not readable back for %s", key)
+        return None
     return _assemble(
         country_code,
         indicator_code,
@@ -213,12 +252,12 @@ async def get_forecast(
         unit,
         frequency,
         last_date,
-        result.model_used,
-        result.median,
-        result.lower,
-        result.upper,
+        stored.model_used or "unknown",
+        stored.median,
+        stored.lower,
+        stored.upper,
         cached=False,
-        generated_at=dt.datetime.now(dt.UTC),
+        generated_at=stored.created_at,
     )
 
 

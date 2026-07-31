@@ -30,9 +30,10 @@ from typing import Any
 from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db import get_session_factory
 from logging_config import get_logger
 from models import Anomaly, CountryProfile, DataSource, IndicatorCatalog, TimeSeries
-from services import prompts
+from services import prompts, singleflight
 from services.cache import (
     TASK_ANOMALY_EXPLANATION,
     build_cache_key,
@@ -156,19 +157,25 @@ async def explain_anomalies(
             results.append(_to_result(row, country_code, indicator_code, cached=True))
             continue
 
-        explanation = await _generate(
-            session,
-            llm=llm,
-            anomaly_id=row.id,
-            country_code=country_code,
-            country_name=country_name,
-            indicator_code=indicator_code,
-            indicator_name=indicator_name,
-            unit=unit,
-            source=source,
-            row=row,
-            points=points,
-            all_flagged=all_flagged,
+        # Keyed on the anomaly itself (decision #31): two visitors opening the same
+        # country at the same moment both see a NULL column and would both generate.
+        # `_generate` writes through its own session for the same reason the other
+        # panels do — the waiters are each holding one of their own.
+        explanation = await singleflight.run(
+            f"anomaly_explanation:{row.id}",
+            lambda row=row: _generate(
+                llm=llm,
+                anomaly_id=row.id,
+                country_code=country_code,
+                country_name=country_name,
+                indicator_code=indicator_code,
+                indicator_name=indicator_name,
+                unit=unit,
+                source=source,
+                row=row,
+                points=points,
+                all_flagged=all_flagged,
+            ),
         )
         results.append(
             AnomalyExplanation(
@@ -201,7 +208,6 @@ def _to_result(
 
 
 async def _generate(
-    session: AsyncSession,
     *,
     llm: LLMService,
     anomaly_id: uuid.UUID,
@@ -252,26 +258,27 @@ async def _generate(
     # The column is the durable home — it survives re-scoring, which is why
     # retraction is timestamp-based. llm_cache records the same text for the
     # cache-hit-rate metrics feature 2.5 has to expose.
-    await session.execute(
-        update(Anomaly).where(Anomaly.id == anomaly_id).values(llm_explanation=completion.text)
-    )
-    await session.commit()
-    await store_response(
-        session,
-        cache_key=build_cache_key(
-            TASK_ANOMALY_EXPLANATION,
-            country=country_code,
-            indicator=indicator_code,
-            date=anomaly["date"],
-            value=anomaly["value"],
-        ),
-        task_type=TASK_ANOMALY_EXPLANATION,
-        response_text=completion.text,
-        provider=completion.provider,
-        model=completion.model,
-        groundedness_score=completion.groundedness.score,
-        token_count=completion.token_count,
-    )
+    async with get_session_factory()() as own:
+        await own.execute(
+            update(Anomaly).where(Anomaly.id == anomaly_id).values(llm_explanation=completion.text)
+        )
+        await own.commit()
+        await store_response(
+            own,
+            cache_key=build_cache_key(
+                TASK_ANOMALY_EXPLANATION,
+                country=country_code,
+                indicator=indicator_code,
+                date=anomaly["date"],
+                value=anomaly["value"],
+            ),
+            task_type=TASK_ANOMALY_EXPLANATION,
+            response_text=completion.text,
+            provider=completion.provider,
+            model=completion.model,
+            groundedness_score=completion.groundedness.score,
+            token_count=completion.token_count,
+        )
     logger.info(
         "anomaly explanation written: %s/%s %s provider=%s groundedness=%.2f",
         country_code,

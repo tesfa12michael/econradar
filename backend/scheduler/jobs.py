@@ -27,6 +27,7 @@ from connectors.base import BaseDataSourceConnector
 from db import get_session_factory
 from logging_config import get_logger
 from services import refresh_anomalies
+from services.cache import prune_expired
 from services.forecast_store import refresh_forecasts
 from services.rag_index import refresh_corpus
 
@@ -134,5 +135,19 @@ async def run_embeddings_refresh() -> dict:
     except Exception as exc:
         logger.exception("scheduled embeddings refresh failed")
         return {"job": "embeddings", "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
-    logger.info("scheduled embeddings refresh complete: %s", summary)
-    return {"job": "embeddings", "status": "success", **summary}
+
+    # Reclaim superseded AI responses while we are already here (decision #31).
+    # Content-addressed keys mean a stale entry is never served again, but nothing
+    # deletes it either; this is the only sweep, and it is deliberately attached to
+    # an existing job rather than becoming an eighth.
+    pruned = 0
+    try:
+        async with get_session_factory()() as session:
+            pruned = await prune_expired(session)
+    except Exception:
+        # A failed sweep is a housekeeping problem, not a corpus problem: the
+        # refresh above already succeeded and must still be reported as such.
+        logger.exception("cache prune failed after the embeddings refresh")
+
+    logger.info("scheduled embeddings refresh complete: %s (pruned %d cache rows)", summary, pruned)
+    return {"job": "embeddings", "status": "success", **summary, "cache_rows_pruned": pruned}

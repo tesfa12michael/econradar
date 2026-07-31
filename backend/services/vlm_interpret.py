@@ -14,9 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
+from db import get_session_factory
 from logging_config import get_logger
 from models import Anomaly, TimeSeries
-from services import prompts
+from services import prompts, singleflight
 from services.cache import (
     TASK_VLM_INTERPRETATION,
     build_cache_key,
@@ -122,41 +123,52 @@ async def interpret_chart(
         plotted["first_date"] = history[-HISTORY_POINTS].date.isoformat()
 
     prompt = prompts.render("vlm_chart.j2", min_words=MIN_WORDS, max_words=MAX_WORDS, **plotted)
-    vlm = service or VLMService()
-    try:
-        completion = await vlm.interpret(prompt, image_b64, context=plotted)
-    except NarrationUnavailable as exc:
-        logger.warning(
-            "VLM interpretation unavailable for %s/%s: %s", country_code, indicator_code, exc
-        )
-        return None
 
-    await store_response(
-        session,
-        cache_key=key,
-        task_type=TASK_VLM_INTERPRETATION,
-        response_text=completion.text,
-        provider=completion.provider,
-        model=completion.model,
-        groundedness_score=completion.groundedness.score,
-        token_count=completion.token_count,
-    )
-    logger.info(
-        "VLM interpretation generated: %s/%s provider=%s groundedness=%.2f",
-        country_code,
-        indicator_code,
-        completion.provider,
-        completion.groundedness.score,
-    )
-    return ChartInterpretation(
-        country_code=country_code,
-        indicator_code=indicator_code,
-        text=completion.text,
-        provider=completion.provider,
-        model=completion.model,
-        groundedness_score=completion.groundedness.score,
-        cached=False,
-    )
+    async def generate() -> ChartInterpretation | None:
+        """One vision call per chart, shared by every concurrent viewer (decision #31).
+
+        The most expensive of the four panels, and the most likely to be requested
+        several times at once — a shared link opens the same chart for everyone who
+        clicks it.
+        """
+        vlm = service or VLMService()
+        try:
+            completion = await vlm.interpret(prompt, image_b64, context=plotted)
+        except NarrationUnavailable as exc:
+            logger.warning(
+                "VLM interpretation unavailable for %s/%s: %s", country_code, indicator_code, exc
+            )
+            return None
+
+        async with get_session_factory()() as own:
+            await store_response(
+                own,
+                cache_key=key,
+                task_type=TASK_VLM_INTERPRETATION,
+                response_text=completion.text,
+                provider=completion.provider,
+                model=completion.model,
+                groundedness_score=completion.groundedness.score,
+                token_count=completion.token_count,
+            )
+        logger.info(
+            "VLM interpretation generated: %s/%s provider=%s groundedness=%.2f",
+            country_code,
+            indicator_code,
+            completion.provider,
+            completion.groundedness.score,
+        )
+        return ChartInterpretation(
+            country_code=country_code,
+            indicator_code=indicator_code,
+            text=completion.text,
+            provider=completion.provider,
+            model=completion.model,
+            groundedness_score=completion.groundedness.score,
+            cached=False,
+        )
+
+    return await singleflight.run(key, generate)
 
 
 def vlm_enabled() -> bool:

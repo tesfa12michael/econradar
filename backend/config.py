@@ -175,9 +175,18 @@ class Settings(BaseSettings):
     # Low but not zero: narration must stay close to the supplied numbers, and a
     # temperature of 0 makes every country's prose read identically.
     llm_temperature: float = 0.2
-    narration_cache_ttl_hours: int = 24
-    vlm_cache_ttl_days: int = 7
-    rag_cache_ttl_hours: int = 24
+    # Cache ages are a safety net, not the invalidation mechanism (decision #31).
+    # Every AI cache key digests the inputs that determine the answer, so a matching
+    # key means identical inputs and regenerating would buy the same text twice.
+    # Real freshness comes from the key changing when the data does; this bounds how
+    # long a response can outlive a change to the prompt or verifier that
+    # `cache.PROMPT_REVISION` was not bumped for.
+    ai_cache_max_age_days: int = 90
+    # How long a country panel will wait to borrow a forecast another panel is
+    # already computing. It never *starts* one: past this it narrates history alone
+    # and picks the forecast up on a later request, which is the behaviour that
+    # keeps a cold GPU off the page-load path.
+    forecast_borrow_wait_seconds: float = 25.0
 
     # Groundedness (decision #8). A narration whose score falls below this is not
     # served — the fabricated number is the failure, so the response is.
