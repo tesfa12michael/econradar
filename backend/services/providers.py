@@ -212,7 +212,11 @@ async def stream_openai_compatible(
 
 
 async def complete_gemini(
-    prompt: str, *, image_b64: str | None = None, model: str | None = None
+    prompt: str,
+    *,
+    image_b64: str | None = None,
+    model: str | None = None,
+    system: str | None = None,
 ) -> Completion:
     """Gemini Flash on Google's Agent Platform — the VLM primary (decision #9).
 
@@ -228,7 +232,7 @@ async def complete_gemini(
     if image_b64:
         parts.append({"inline_data": {"mime_type": "image/png", "data": image_b64}})
 
-    body = {
+    body: dict[str, Any] = {
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
             "temperature": settings.llm_temperature,
@@ -236,6 +240,11 @@ async def complete_gemini(
             "thinkingConfig": {"thinkingLevel": settings.gemini_thinking_level},
         },
     }
+    if system:
+        # Google's equivalent of the system role. Without it the groundedness rules
+        # reach the model only as prose inside the user turn, which is measurably
+        # weaker — see decision #29.
+        body["systemInstruction"] = {"parts": [{"text": system}]}
 
     async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
         try:
@@ -286,9 +295,14 @@ async def complete_gemini(
     )
 
 
-async def complete_vision_qwen(prompt: str, image_b64: str) -> Completion:
+async def complete_vision_qwen(
+    prompt: str, image_b64: str, *, system: str | None = None
+) -> Completion:
     """Qwen3-VL through DashScope — the VLM fallback (decision #9, transport #28)."""
-    messages = [
+    messages: list[dict[str, Any]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append(
         {
             "role": "user",
             "content": [
@@ -299,5 +313,5 @@ async def complete_vision_qwen(prompt: str, image_b64: str) -> Completion:
                 },
             ],
         }
-    ]
+    )
     return await complete_openai_compatible("qwen3_vl_dashscope", messages)

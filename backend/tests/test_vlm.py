@@ -102,7 +102,7 @@ def test_the_vlm_order_is_the_documented_one():
 
 
 async def test_gemini_is_tried_first(monkeypatch, vlm_keys):
-    async def fake_gemini(_prompt, *, image_b64=None, model=None):
+    async def fake_gemini(_prompt, *, image_b64=None, model=None, system=None):
         return Completion(
             text="The line climbs steadily to 68.5% by 2019.",
             provider="gemini_flash",
@@ -118,10 +118,10 @@ async def test_gemini_is_tried_first(monkeypatch, vlm_keys):
 async def test_gemini_rate_limited_falls_back_to_qwen(monkeypatch, vlm_keys):
     """features.md 2.1: "fallback triggers correctly on Gemini rate-limit"."""
 
-    async def fake_gemini(_prompt, *, image_b64=None, model=None):
+    async def fake_gemini(_prompt, *, image_b64=None, model=None, system=None):
         raise ProviderRateLimited("gemini_flash rate limited (HTTP 429)")
 
-    async def fake_qwen(_prompt, _image):
+    async def fake_qwen(_prompt, _image, *, system=None):
         return Completion(
             text="A steady climb, ending at 68.5%.",
             provider="qwen3_vl_dashscope",
@@ -144,14 +144,14 @@ async def test_a_vlm_reading_a_number_off_the_axes_is_discarded(monkeypatch, vlm
     reading is thrown away and the next provider tried.
     """
 
-    async def fake_gemini(_prompt, *, image_b64=None, model=None):
+    async def fake_gemini(_prompt, *, image_b64=None, model=None, system=None):
         return Completion(
             text="The series peaks near 54.3% before easing.",
             provider="gemini_flash",
             model="gemini-3.6-flash",
         )
 
-    async def fake_qwen(_prompt, _image):
+    async def fake_qwen(_prompt, _image, *, system=None):
         return Completion(
             text="The line rises steadily, ending at 68.5%.",
             provider="qwen3_vl_dashscope",
@@ -167,10 +167,10 @@ async def test_a_vlm_reading_a_number_off_the_axes_is_discarded(monkeypatch, vlm
 
 
 async def test_both_vlm_providers_failing_raises(monkeypatch, vlm_keys):
-    async def fake_gemini(_prompt, *, image_b64=None, model=None):
+    async def fake_gemini(_prompt, *, image_b64=None, model=None, system=None):
         raise ProviderError("gemini_flash returned no content (blocked: SAFETY)")
 
-    async def fake_qwen(_prompt, _image):
+    async def fake_qwen(_prompt, _image, *, system=None):
         raise ProviderRateLimited("qwen rate limited")
 
     monkeypatch.setattr(providers, "complete_gemini", fake_gemini)
@@ -191,6 +191,42 @@ async def test_no_vlm_key_is_a_clear_failure(monkeypatch):
     monkeypatch.setattr(settings, "qwen_api_key", None)
     with pytest.raises(NarrationUnavailable, match="no VLM provider is configured"):
         await VLMService().interpret("prompt", "aGk=", context=CONTEXT)
+
+
+async def test_both_vlm_providers_receive_the_grounded_system_prompt(monkeypatch, vlm_keys):
+    """Decision #29 — the regression this pins actually shipped once.
+
+    The text rotation gets `system_grounded.j2` through `prompts.chat_messages`, but
+    the vision path passed a bare prompt string and so was the one caller never told
+    the rules. Live output showed the cost: models approximated ranges off the
+    plotted line and computed forecast-band widths, both of which decision #8
+    forbids and the verifier then threw away. A vision model reading figures off
+    pixels needs the rule more than a text model does, not less.
+    """
+    seen: dict[str, str | None] = {}
+
+    async def fake_gemini(_prompt, *, image_b64=None, model=None, system=None):
+        seen["gemini_flash"] = system
+        raise ProviderRateLimited("gemini_flash rate limited (HTTP 429)")
+
+    async def fake_qwen(_prompt, _image, *, system=None):
+        seen["qwen3_vl_dashscope"] = system
+        return Completion(
+            text="The line rises steadily, ending at 68.5%.",
+            provider="qwen3_vl_dashscope",
+            model="qwen3-vl-plus",
+        )
+
+    monkeypatch.setattr(providers, "complete_gemini", fake_gemini)
+    monkeypatch.setattr(providers, "complete_vision_qwen", fake_qwen)
+    await VLMService().interpret("prompt", "aGk=", context=CONTEXT)
+
+    assert set(seen) == {"gemini_flash", "qwen3_vl_dashscope"}
+    for provider, system in seen.items():
+        assert system, f"{provider} was called without a system prompt"
+        # The two prohibitions the live failures turned on.
+        assert "Do NOT calculate" in system
+        assert "Do NOT approximate" in system
 
 
 # ── anomaly explanation prompt discipline (feature 2.3) ──────────────────────
