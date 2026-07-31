@@ -185,11 +185,59 @@ QUALIFIER_TERMS: tuple[str, ...] = (
     "monetary reform",
 )
 
-#: Nouns that turn a following figure into a claim about a *change*, not a level.
+_NUM = r"[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?|[-+]?\d*\.?\d+"
+
+#: A direction word that *governs* a figure: "dropped to 21.0%", "eased to 7.04%".
+#:
+#: Sentence-level co-occurrence was tried first and was wrong. South Africa's
+#: inflation peaked at 7.04% in 2022 and fell to 3.21% by 2025, so the correct
+#: sentence "fell from 7.04% in 2022 to 3.21% in 2025" was rejected on the grounds
+#: that 7.04 is itself flagged a spike — true, and irrelevant, because there the
+#: value is where a later fall *started*. Requiring "to"/"at" ties the claim to the
+#: figure it is actually about, and leaves "from" alone.
+_DIRECTED_TO_RE = re.compile(
+    rf"\b(?P<word>[a-z]+)\s+(?:to|at)\s+(?P<num>{_NUM})",
+    re.IGNORECASE,
+)
+
+#: Nouns that unambiguously name the *size* of a move. Deliberately excludes
+#: "spike", "surge", "peak" and friends: "a spike of 7%" is ordinary English for the
+#: level reached, and reading it as a change would reject honest prose.
+_CHANGE_NOUNS: frozenset[str] = frozenset(
+    {
+        "increase",
+        "increases",
+        "increased",
+        "decrease",
+        "decreases",
+        "decreased",
+        "rise",
+        "rises",
+        "rose",
+        "fall",
+        "falls",
+        "fell",
+        "decline",
+        "declines",
+        "declined",
+        "drop",
+        "drops",
+        "dropped",
+        "gain",
+        "gains",
+        "loss",
+        "losses",
+        "growth",
+        "reduction",
+        "change",
+        "swing",
+    }
+)
+
 #: Matched only with an explicit "of"/"by", so "fell to 70.8%" — a perfectly good
 #: statement of a level — is never caught by this rule.
 _CHANGE_OF_RE = re.compile(
-    r"\b(?P<word>[a-z]+)\s+(?:of|by)\s+(?P<num>[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?|[-+]?\d*\.?\d+)",
+    rf"\b(?P<word>[a-z]+)\s+(?:of|by)\s+(?P<num>{_NUM})",
     re.IGNORECASE,
 )
 
@@ -210,7 +258,6 @@ _MAGNITUDE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_WORD_RE = re.compile(r"[a-z]+", re.IGNORECASE)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 RISE, FALL = "rise", "fall"
@@ -455,11 +502,6 @@ def _sentences(text: str) -> list[str]:
     return [s for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
-def _direction_words(sentence: str) -> tuple[bool, bool]:
-    words = {w.lower() for w in _WORD_RE.findall(sentence)}
-    return bool(words & RISE_WORDS), bool(words & FALL_WORDS)
-
-
 def check_semantics(text: str, context: Any, *, tolerance: float | None = None) -> SemanticReport:
     """Read `text` against what `context` actually asserts about direction and scale."""
     tol = settings.groundedness_tolerance if tolerance is None else tolerance
@@ -479,25 +521,34 @@ def check_semantics(text: str, context: Any, *, tolerance: float | None = None) 
     from services.groundedness import extract_numbers  # local: avoids a cycle
 
     for sentence in _sentences(text):
-        has_rise, has_fall = _direction_words(sentence)
         numbers = extract_numbers(sentence)
         lowered = sentence.lower()
 
-        # R1 — a directional level described with the opposite vocabulary.
-        if has_rise != has_fall:  # exactly one direction is asserted here
-            asserted = RISE if has_rise else FALL
-            for literal, value in numbers:
-                for fact in level_facts:
-                    if _matches(value, fact.value, tol) and fact.direction != asserted:
-                        contradictions.append(
-                            f"{literal} described as a {asserted} when {fact.origin}"
-                        )
-                        break
+        # R1 — a directional level described with the opposite vocabulary. Only
+        # where the direction word governs the figure ("dropped to 21.0%"), never
+        # merely where both appear in one sentence.
+        for match in _DIRECTED_TO_RE.finditer(sentence):
+            word = match.group("word").lower()
+            if word in RISE_WORDS:
+                asserted = RISE
+            elif word in FALL_WORDS:
+                asserted = FALL
+            else:
+                continue
+            value = _to_float(match.group("num"))
+            if value is None:
+                continue
+            for fact in level_facts:
+                if _matches(value, fact.value, tol) and fact.direction != asserted:
+                    contradictions.append(
+                        f"{match.group('num')} described as a {asserted} when {fact.origin}"
+                    )
+                    break
 
         # R2 — a level presented as the size of a change.
         for match in _CHANGE_OF_RE.finditer(sentence):
             word = match.group("word").lower()
-            if word not in RISE_WORDS and word not in FALL_WORDS:
+            if word not in _CHANGE_NOUNS:
                 continue
             value = _to_float(match.group("num"))
             if value is None:

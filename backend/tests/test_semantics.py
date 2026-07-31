@@ -120,6 +120,50 @@ def test_correct_prose_is_left_alone(text):
     assert report.passed, report.reason()
 
 
+#: South Africa: inflation peaks at 7.04% in 2022 (a spike) and then falls away.
+#: This context caught the first draft of R1 rejecting a correct sentence, live.
+SOUTH_AFRICA = {
+    "unit": "%",
+    "recent": [
+        {"date": "2022-01-01", "value": 7.04},
+        {"date": "2023-01-01", "value": 6.08},
+        {"date": "2025-01-01", "value": 3.21},
+    ],
+    "anomalies": [
+        {"date": "2022-01-01", "value": 7.04, "deviation_type": "spike", "previous_value": 4.62},
+        {"date": "2004-01-01", "value": -0.69, "deviation_type": "drop", "previous_value": 5.68},
+    ],
+}
+
+
+def test_a_peak_may_be_the_start_of_a_later_fall():
+    """The regression that rejected all three providers on ZAF before it was fixed.
+
+    7.04% is genuinely a spike *and* genuinely where a multi-year decline began.
+    Sentence-level co-occurrence of "fell" and "7.04" is not a contradiction; only
+    a direction word governing the figure is. Getting this wrong took narration for
+    the series offline entirely, which is what over-strict verification looks like.
+    """
+    report = check_semantics(
+        "Inflation fell from 7.04% in 2022-01-01 to 3.21% in 2025-01-01.", SOUTH_AFRICA
+    )
+    assert report.passed, report.reason()
+
+
+def test_the_same_figure_is_still_caught_when_the_direction_governs_it():
+    """The narrowing must not cost the catch: 7.04 is a spike, so easing *to* it is
+    still a contradiction."""
+    report = check_semantics("Inflation eased to 7.04% in 2022-01-01.", SOUTH_AFRICA)
+    assert not report.passed
+    assert report.contradictions
+
+
+def test_a_spike_of_x_percent_is_ordinary_english_for_a_level():
+    """ "a spike of 7%" means the level reached, not a 7-point move. Reading it as a
+    change would reject honest prose, so only unambiguous change nouns trigger R2."""
+    assert check_semantics("The series shows a spike of 7.04% in 2022-01-01.", SOUTH_AFRICA).passed
+
+
 def test_a_value_the_context_describes_both_ways_accuses_nobody():
     """Two anomalies, same value, opposite directions — nothing is provable."""
     context = {
