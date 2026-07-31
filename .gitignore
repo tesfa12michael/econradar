@@ -53,6 +53,11 @@ Thumbs.db
 /tmp/
 scratch/
 
+# Caches written *inside* the working tree on the VPS, where $HOME is /opt/econradar:
+# pip, matplotlib's fontlist, and the fastembed/HuggingFace model download (192 MB total).
+# Untracked but not ignored meant one `git add -A` on the box would have committed them.
+.cache/
+
 # ── Claude Code local tooling (generic skill libraries, not project source) ──
 .claude/
 
