@@ -65,8 +65,7 @@ class VLMService:
         configured = self.available()
         if not configured:
             raise NarrationUnavailable(
-                "no VLM provider is configured — set GOOGLE_AGENT_PLATFORM_API_KEY "
-                "or QWEN_API_KEY"
+                "no VLM provider is configured — set GOOGLE_AGENT_PLATFORM_API_KEY or QWEN_API_KEY"
             )
 
         attempts: list[str] = []

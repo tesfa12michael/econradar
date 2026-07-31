@@ -268,9 +268,7 @@ async def complete_gemini(
         reason = (payload.get("promptFeedback") or {}).get("blockReason") or candidate.get(
             "finishReason"
         )
-        raise ProviderError(
-            f"gemini_flash returned no content{f' ({reason})' if reason else ''}"
-        )
+        raise ProviderError(f"gemini_flash returned no content{f' ({reason})' if reason else ''}")
     if candidate.get("finishReason") == "MAX_TOKENS":
         # Reasoning ate the budget. A sentence cut off mid-figure can still satisfy the
         # verifier, so this hands over to the next provider instead of serving a stump.
