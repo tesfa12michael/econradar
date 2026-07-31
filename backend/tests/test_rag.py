@@ -271,3 +271,49 @@ async def test_the_collected_form_withholds_an_unverified_answer(monkeypatch, st
     assert result["answer"] == ""
     assert result["grounded"] is False
     assert result["error"]
+
+
+# ── citation markers are markup, not numeric claims (feature 2.2) ─────────────
+
+
+def test_citation_markers_are_separated_from_the_prose():
+    prose, cited = chat_module.split_citation_markers(
+        "Inflation was 23.0% [1] in 2025, above Ghana's 14.2% [12]."
+    )
+    assert cited == [1, 12]
+    assert "[1]" not in prose and "[12]" not in prose
+    assert "23.0%" in prose and "14.2%" in prose
+
+
+async def test_a_citation_marker_is_not_scored_as_a_fabricated_number(
+    monkeypatch, stub_cache, keys
+):
+    """The regression this pins was live, and failed answers for no real reason.
+
+    `[4]` matches the verifier's number pattern exactly as a bare `4` does, so a
+    correct answer was retracted because no figure in the evidence rounded to 4 —
+    while `[6]` had passed elsewhere only because round(5.8, 0) == 6. Groundedness
+    must not turn on the coincidence of a citation index.
+    """
+    _stub_retrieval(monkeypatch, [NIGERIA] * 8)
+    _stub_stream(monkeypatch, {"groq": ["Inflation in Nigeria was 23.0% in 2025-01-01 [4]."]})
+
+    events = await _collect(stream_chat(None, "nigeria inflation"))
+    verdict = next(e for e in events if e["type"] == "verdict")
+    assert verdict["grounded"] is True, verdict.get("reason")
+
+
+async def test_a_citation_pointing_past_the_evidence_is_retracted(monkeypatch, stub_cache, keys):
+    """The check the number pattern was never actually performing.
+
+    One piece of evidence was retrieved, so [7] refers to nothing. That is a
+    fabricated source, and a fabricated source is as serious as a fabricated
+    figure — the answer is retracted rather than served with a dead marker.
+    """
+    _stub_retrieval(monkeypatch, [NIGERIA])
+    _stub_stream(monkeypatch, {"groq": ["Inflation in Nigeria was 23.0% in 2025-01-01 [7]."]})
+
+    events = await _collect(stream_chat(None, "nigeria inflation"))
+    verdict = next(e for e in events if e["type"] == "verdict")
+    assert verdict["grounded"] is False
+    assert "[7]" in verdict["reason"]

@@ -22,6 +22,7 @@ evidence is refused without a generation step at all.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -79,6 +80,26 @@ def citations_for(result: RetrievalResult) -> list[Citation]:
         )
         for i, e in enumerate(result.evidence, start=1)
     ]
+
+
+_CITATION_RE = re.compile(r"\[(\d{1,2})\]")
+
+
+def split_citation_markers(text: str) -> tuple[str, list[int]]:
+    """Separate the prose from the `[n]` markers, returning both.
+
+    A citation marker is structural markup, not a numeric claim, but `[4]` matches
+    the verifier's number pattern exactly as a bare `4` would. Verifying the raw
+    answer therefore made groundedness depend on whether a citation index happened
+    to coincide with some figure in the evidence — `[6]` passed only because
+    `round(5.8, 0) == 6`, and `[4]` failed the same answer for no better reason.
+
+    Stripping them removes that coincidence. The indices are not discarded, though:
+    they are checked against the evidence list instead, which is a real test the
+    number pattern was never performing — a marker pointing past the end of the
+    evidence is a fabricated citation.
+    """
+    return _CITATION_RE.sub("", text), [int(m.group(1)) for m in _CITATION_RE.finditer(text)]
 
 
 def _cache_key(question: str, evidence: list[Evidence]) -> str:
@@ -200,14 +221,22 @@ async def stream_chat(
         yield {"type": "done"}
         return
 
-    report = verify(answer, context)
-    if not report.passed:
+    prose, cited = split_citation_markers(answer)
+    report = verify(prose, context)
+    dangling = sorted({i for i in cited if not 1 <= i <= len(result.evidence)})
+    if not report.passed or dangling:
         # Retraction, not repair. The client discards what it rendered and nothing
         # is cached, so the fabrication cannot be served again.
+        reason = (
+            report.reason()
+            if not report.passed
+            else "citation markers with no evidence behind them: "
+            + ", ".join(f"[{i}]" for i in dangling)
+        )
         logger.warning(
-            "chat answer failed groundedness (score=%.2f, %s) — retracting",
+            "chat answer failed verification (score=%.2f, %s) — retracting",
             report.score,
-            report.reason(),
+            reason,
         )
         yield {
             "type": "verdict",
@@ -216,7 +245,7 @@ async def stream_chat(
             "provider": used_provider,
             "model": None,
             "cached": False,
-            "reason": report.reason(),
+            "reason": reason,
         }
         yield {"type": "done"}
         return
