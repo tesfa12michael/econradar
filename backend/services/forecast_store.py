@@ -193,18 +193,19 @@ async def get_forecast(
         # Waiting for one already in flight costs nothing and saves a second
         # generation of every panel that mentions it; starting one here would put a
         # cold GPU on a path that is explicitly not allowed to.
-        if (
-            await singleflight.await_in_flight(
-                key,
-                timeout=settings.forecast_borrow_wait_seconds,
-                appear_within=settings.forecast_borrow_appear_seconds,
-            )
-            is not None
-        ):
+        shared = await singleflight.await_in_flight(
+            key,
+            timeout=settings.forecast_borrow_wait_seconds,
+            appear_within=settings.forecast_borrow_appear_seconds,
+        )
+        if shared is not None:
             borrowed = await get_cached_forecast(session, key)
             if borrowed is not None:
                 logger.info("forecast borrowed from an in-flight computation: %s", key)
                 return assemble_cached(borrowed)
+            logger.warning("forecast borrow woke with nothing readable back: %s", key)
+        else:
+            logger.info("forecast borrow found nothing in flight for %s", key)
         return None
 
     svc = service or ForecastingService()
