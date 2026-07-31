@@ -93,12 +93,12 @@ def test_the_base64_form_decodes_back_to_the_same_png():
 def vlm_keys(monkeypatch):
     from config import settings
 
-    monkeypatch.setattr(settings, "google_ai_studio_api_key", "test-google")
-    monkeypatch.setattr(settings, "openrouter_api_key", "test-openrouter")
+    monkeypatch.setattr(settings, "google_agent_platform_api_key", "test-google")
+    monkeypatch.setattr(settings, "qwen_api_key", "test-qwen")
 
 
 def test_the_vlm_order_is_the_documented_one():
-    assert VLMService.PROVIDER_ORDER == ("gemini_flash", "qwen3_vl_openrouter")
+    assert VLMService.PROVIDER_ORDER == ("gemini_flash", "qwen3_vl_dashscope")
 
 
 async def test_gemini_is_tried_first(monkeypatch, vlm_keys):
@@ -106,7 +106,7 @@ async def test_gemini_is_tried_first(monkeypatch, vlm_keys):
         return Completion(
             text="The line climbs steadily to 68.5% by 2019.",
             provider="gemini_flash",
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
         )
 
     monkeypatch.setattr(providers, "complete_gemini", fake_gemini)
@@ -124,15 +124,15 @@ async def test_gemini_rate_limited_falls_back_to_qwen(monkeypatch, vlm_keys):
     async def fake_qwen(_prompt, _image):
         return Completion(
             text="A steady climb, ending at 68.5%.",
-            provider="qwen3_vl_openrouter",
-            model="qwen/qwen3-vl",
+            provider="qwen3_vl_dashscope",
+            model="qwen3-vl-plus",
         )
 
     monkeypatch.setattr(providers, "complete_gemini", fake_gemini)
-    monkeypatch.setattr(providers, "complete_vision_openrouter", fake_qwen)
+    monkeypatch.setattr(providers, "complete_vision_qwen", fake_qwen)
 
     result = await VLMService().interpret("prompt", "aGk=", context=CONTEXT)
-    assert result.provider == "qwen3_vl_openrouter"
+    assert result.provider == "qwen3_vl_dashscope"
     assert "rate limited" in result.attempts[0]
 
 
@@ -148,21 +148,21 @@ async def test_a_vlm_reading_a_number_off_the_axes_is_discarded(monkeypatch, vlm
         return Completion(
             text="The series peaks near 54.3% before easing.",
             provider="gemini_flash",
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
         )
 
     async def fake_qwen(_prompt, _image):
         return Completion(
             text="The line rises steadily, ending at 68.5%.",
-            provider="qwen3_vl_openrouter",
-            model="qwen/qwen3-vl",
+            provider="qwen3_vl_dashscope",
+            model="qwen3-vl-plus",
         )
 
     monkeypatch.setattr(providers, "complete_gemini", fake_gemini)
-    monkeypatch.setattr(providers, "complete_vision_openrouter", fake_qwen)
+    monkeypatch.setattr(providers, "complete_vision_qwen", fake_qwen)
 
     result = await VLMService().interpret("prompt", "aGk=", context=CONTEXT)
-    assert result.provider == "qwen3_vl_openrouter"
+    assert result.provider == "qwen3_vl_dashscope"
     assert "54.3" not in result.text
 
 
@@ -174,7 +174,7 @@ async def test_both_vlm_providers_failing_raises(monkeypatch, vlm_keys):
         raise ProviderRateLimited("qwen rate limited")
 
     monkeypatch.setattr(providers, "complete_gemini", fake_gemini)
-    monkeypatch.setattr(providers, "complete_vision_openrouter", fake_qwen)
+    monkeypatch.setattr(providers, "complete_vision_qwen", fake_qwen)
 
     with pytest.raises(NarrationUnavailable, match="every VLM provider failed"):
         await VLMService().interpret("prompt", "aGk=", context=CONTEXT)
@@ -183,8 +183,12 @@ async def test_both_vlm_providers_failing_raises(monkeypatch, vlm_keys):
 async def test_no_vlm_key_is_a_clear_failure(monkeypatch):
     from config import settings
 
+    # Both spellings must be cleared: settings.google_api_key falls back from one
+    # to the other, so nulling only the new name would still find a real key in a
+    # developer .env and quietly turn this test green for the wrong reason.
+    monkeypatch.setattr(settings, "google_agent_platform_api_key", None)
     monkeypatch.setattr(settings, "google_ai_studio_api_key", None)
-    monkeypatch.setattr(settings, "openrouter_api_key", None)
+    monkeypatch.setattr(settings, "qwen_api_key", None)
     with pytest.raises(NarrationUnavailable, match="no VLM provider is configured"):
         await VLMService().interpret("prompt", "aGk=", context=CONTEXT)
 

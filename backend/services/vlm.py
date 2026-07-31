@@ -1,8 +1,9 @@
 """VLMService — chart-to-narrative vision pipeline (feature 2.1, Phase 3).
 
 Fallback order (authoritative — see architecture.md decision #9):
-    Gemini Flash (Google AI Studio)  →  Qwen3-VL (via OpenRouter)
-Do NOT reorder without updating docs/architecture.md.
+    Gemini Flash (Google Agent Platform)  →  Qwen3-VL (via DashScope)
+Do NOT reorder without updating docs/architecture.md. The hosts in brackets are
+transport and have both moved once (decision #28); the *order* has not.
 
 The pipeline renders a chart to PNG server-side (`services/chart_render.py`) and
 sends the image to the VLM; the same groundedness discipline as text narration
@@ -32,7 +33,7 @@ logger = get_logger(__name__)
 
 
 class VLMService:
-    PROVIDER_ORDER: ClassVar[tuple[str, ...]] = ("gemini_flash", "qwen3_vl_openrouter")
+    PROVIDER_ORDER: ClassVar[tuple[str, ...]] = ("gemini_flash", "qwen3_vl_dashscope")
 
     def available(self) -> list[str]:
         return providers.configured_providers(self.PROVIDER_ORDER)
@@ -52,7 +53,8 @@ class VLMService:
         configured = self.available()
         if not configured:
             raise NarrationUnavailable(
-                "no VLM provider is configured — set GOOGLE_AI_STUDIO_API_KEY or OPENROUTER_API_KEY"
+                "no VLM provider is configured — set GOOGLE_AGENT_PLATFORM_API_KEY "
+                "or QWEN_API_KEY"
             )
 
         attempts: list[str] = []
@@ -61,7 +63,7 @@ class VLMService:
                 if provider == "gemini_flash":
                     completion = await providers.complete_gemini(prompt, image_b64=image_b64)
                 else:
-                    completion = await providers.complete_vision_openrouter(prompt, image_b64)
+                    completion = await providers.complete_vision_qwen(prompt, image_b64)
             except ProviderRateLimited as exc:
                 attempts.append(f"{provider}: rate limited")
                 logger.warning("VLM order: %s rate limited, falling back — %s", provider, exc)

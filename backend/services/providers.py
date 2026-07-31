@@ -4,7 +4,8 @@ Raw `httpx` rather than four vendor SDKs. Mistral, Groq and OpenRouter all speak
 the OpenAI chat-completions shape, so one function covers three providers, and the
 alternative would put three more dependency trees on a 1 vCPU / 2 GB box to send
 the same JSON. Gemini is the one genuinely different wire format and gets its own
-adapter.
+adapter. Qwen3-VL joined the compatible group when it moved off OpenRouter onto
+DashScope, which also speaks the OpenAI shape (decision #28).
 
 Failures are typed by what the caller should *do* about them, not by what went
 wrong: `ProviderRateLimited` and `ProviderError` both mean "move to the next
@@ -34,9 +35,21 @@ OPENAI_COMPATIBLE_ENDPOINTS: dict[str, str] = {
     "mistral": "https://api.mistral.ai/v1/chat/completions",
     "groq": "https://api.groq.com/openai/v1/chat/completions",
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+    # Qwen3-VL direct from Alibaba's DashScope, OpenAI-compatible mode. The `-intl`
+    # host is the one that accepts an international key; the Beijing host answers 401
+    # for the same credential.
+    "qwen3_vl_dashscope": (
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
+    ),
 }
 
-GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+# Vertex AI — renamed "Agent Platform" — rather than AI Studio. The two hosts take
+# the same request body but not the same credentials: an Agent Platform key is
+# rejected by generativelanguage.googleapis.com with HTTP 403 PERMISSION_DENIED.
+# The key travels as a query parameter here, not the x-goog-api-key header.
+GEMINI_ENDPOINT = (
+    "https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent"
+)
 
 
 class ProviderError(RuntimeError):
@@ -64,9 +77,8 @@ def api_key_for(provider: str) -> str | None:
         "mistral": settings.mistral_api_key,
         "groq": settings.groq_api_key,
         "openrouter": settings.openrouter_api_key,
-        "gemini_flash": settings.google_ai_studio_api_key,
-        # Qwen3-VL is served through OpenRouter, so it shares that key.
-        "qwen3_vl_openrouter": settings.openrouter_api_key,
+        "gemini_flash": settings.google_api_key,
+        "qwen3_vl_dashscope": settings.qwen_api_key,
     }.get(provider)
 
 
@@ -76,7 +88,7 @@ def model_for(provider: str) -> str:
         "groq": settings.groq_model,
         "openrouter": settings.openrouter_model,
         "gemini_flash": settings.gemini_model,
-        "qwen3_vl_openrouter": settings.openrouter_vlm_model,
+        "qwen3_vl_dashscope": settings.qwen_vlm_model,
     }[provider]
 
 
@@ -87,7 +99,7 @@ def configured_providers(order: Sequence[str]) -> list[str]:
 
 def _headers(provider: str, key: str) -> dict[str, str]:
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    if provider in ("openrouter", "qwen3_vl_openrouter"):
+    if provider == "openrouter":
         # OpenRouter attributes free-tier traffic to a referring app; omitting these
         # is allowed but lands the request in a stricter bucket.
         headers["HTTP-Referer"] = "https://econradar.vercel.app"
@@ -123,7 +135,7 @@ def _openai_body(
 async def complete_openai_compatible(
     provider: str, messages: Sequence[dict[str, Any]], *, model: str | None = None
 ) -> Completion:
-    """One chat completion from Mistral, Groq, OpenRouter, or Qwen3-VL via OpenRouter."""
+    """One chat completion from Mistral, Groq, OpenRouter, or Qwen3-VL via DashScope."""
     key = api_key_for(provider)
     if not key:
         raise ProviderNotConfigured(f"{provider} has no API key configured")
@@ -202,10 +214,10 @@ async def stream_openai_compatible(
 async def complete_gemini(
     prompt: str, *, image_b64: str | None = None, model: str | None = None
 ) -> Completion:
-    """Gemini Flash via Google AI Studio — the VLM primary (decision #9).
+    """Gemini Flash on Google's Agent Platform — the VLM primary (decision #9).
 
     Google's wire format is `contents[].parts[]` rather than `messages[]`, and the
-    key goes in a header rather than an Authorization bearer.
+    key travels as a query parameter rather than an Authorization bearer.
     """
     key = api_key_for("gemini_flash")
     if not key:
@@ -220,7 +232,8 @@ async def complete_gemini(
         "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {
             "temperature": settings.llm_temperature,
-            "maxOutputTokens": settings.llm_max_tokens,
+            "maxOutputTokens": settings.gemini_max_output_tokens,
+            "thinkingConfig": {"thinkingLevel": settings.gemini_thinking_level},
         },
     }
 
@@ -228,24 +241,39 @@ async def complete_gemini(
         try:
             response = await client.post(
                 GEMINI_ENDPOINT.format(model=chosen),
-                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                params={"key": key},
+                headers={"Content-Type": "application/json"},
                 json=body,
             )
         except httpx.HTTPError as exc:
+            # Deliberately only the exception type: an httpx error's str() carries the
+            # request URL, and for this provider the URL carries the key.
             raise ProviderError(f"gemini_flash transport error: {type(exc).__name__}") from exc
 
     _raise_for_status("gemini_flash", response)
     payload = response.json()
-    try:
-        text = "".join(
-            part.get("text", "") for part in payload["candidates"][0]["content"]["parts"]
-        )
-    except (KeyError, IndexError, TypeError) as exc:
+
+    candidate = (payload.get("candidates") or [{}])[0]
+    if not candidate.get("content"):
         # A safety block returns candidates without content — a real outcome, not a bug.
-        blocked = (payload.get("promptFeedback") or {}).get("blockReason")
+        reason = (payload.get("promptFeedback") or {}).get("blockReason") or candidate.get(
+            "finishReason"
+        )
         raise ProviderError(
-            f"gemini_flash returned no content{f' (blocked: {blocked})' if blocked else ''}"
-        ) from exc
+            f"gemini_flash returned no content{f' ({reason})' if reason else ''}"
+        )
+    if candidate.get("finishReason") == "MAX_TOKENS":
+        # Reasoning ate the budget. A sentence cut off mid-figure can still satisfy the
+        # verifier, so this hands over to the next provider instead of serving a stump.
+        raise ProviderError("gemini_flash hit the output ceiling before finishing")
+    # Reasoning parts are flagged `thought`. They are the model's scratchpad, not its
+    # answer — concatenating them would show a reader the working and feed the
+    # verifier numbers the model was only considering.
+    text = "".join(
+        part.get("text", "")
+        for part in candidate["content"].get("parts", [])
+        if not part.get("thought")
+    )
     if not text.strip():
         raise ProviderError("gemini_flash returned empty content")
 
@@ -258,8 +286,8 @@ async def complete_gemini(
     )
 
 
-async def complete_vision_openrouter(prompt: str, image_b64: str) -> Completion:
-    """Qwen3-VL through OpenRouter — the VLM fallback (decision #9)."""
+async def complete_vision_qwen(prompt: str, image_b64: str) -> Completion:
+    """Qwen3-VL through DashScope — the VLM fallback (decision #9, transport #28)."""
     messages = [
         {
             "role": "user",
@@ -272,4 +300,4 @@ async def complete_vision_openrouter(prompt: str, image_b64: str) -> Completion:
             ],
         }
     ]
-    return await complete_openai_compatible("qwen3_vl_openrouter", messages)
+    return await complete_openai_compatible("qwen3_vl_dashscope", messages)

@@ -46,4 +46,4 @@ def test_fallback_orders_are_pinned() -> None:
     # Guards the CLAUDE.md hard rule: this order is authoritative.
     assert ForecastingService.MODEL_CASCADE == ("chronos2", "timesfm", "statsforecast")
     assert LLMService.PROVIDER_ORDER == ("mistral", "groq", "openrouter")
-    assert VLMService.PROVIDER_ORDER == ("gemini_flash", "qwen3_vl_openrouter")
+    assert VLMService.PROVIDER_ORDER == ("gemini_flash", "qwen3_vl_dashscope")

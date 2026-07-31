@@ -82,7 +82,16 @@ class Settings(BaseSettings):
     mistral_api_key: str | None = None
     groq_api_key: str | None = None
     openrouter_api_key: str | None = None
+    # Google renamed Vertex AI to "Agent Platform"; its keys authenticate against
+    # aiplatform.googleapis.com and are *rejected* by the AI Studio host
+    # (generativelanguage.googleapis.com returns 403). Both names are accepted so an
+    # older .env keeps working — read them through `google_api_key`, never directly.
+    google_agent_platform_api_key: str | None = None
     google_ai_studio_api_key: str | None = None
+    # Qwen3-VL served direct from DashScope rather than through OpenRouter, whose
+    # free Qwen3-VL slug was withdrawn (decision #28). Transport only — the VLM
+    # fallback order in docs/architecture.md #9 is unchanged.
+    qwen_api_key: str | None = None
 
     # ── Admin ──
     admin_health_token_hash: str | None = None
@@ -145,11 +154,24 @@ class Settings(BaseSettings):
     # Model per provider. Names change on free tiers, so they are configuration.
     mistral_model: str = "mistral-small-latest"
     groq_model: str = "llama-3.3-70b-versatile"
-    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct:free"
-    gemini_model: str = "gemini-2.5-flash"
-    openrouter_vlm_model: str = "qwen/qwen3-vl-235b-a22b-instruct:free"
+    # llama-3.3-70b-instruct:free was withdrawn from OpenRouter's free tier — the API
+    # answers 404 with "use the paid slug instead". Free slugs churn; that is exactly
+    # why these are configuration and not constants.
+    openrouter_model: str = "openai/gpt-oss-20b:free"
+    gemini_model: str = "gemini-3.6-flash"
+    qwen_vlm_model: str = "qwen3-vl-plus"
     llm_timeout_seconds: float = 45.0
     llm_max_tokens: int = 700
+    # Gemini 3.x thinks before answering, and the thoughts are charged against
+    # maxOutputTokens. Sharing the 700-token budget would let thinking swallow the
+    # response whole and return an empty candidate, so Gemini gets its own ceiling.
+    # Measured on this workload: thinkingLevel "low" spends ~350 thinking tokens
+    # against ~1,950 at "high" and ~2,550 unset, and 2048 total proved marginal once
+    # a chart image and a full data block were in the request — it intermittently
+    # tripped the MAX_TOKENS guard below. 4096 clears the observed worst case while
+    # still bounding a runaway.
+    gemini_max_output_tokens: int = 4096
+    gemini_thinking_level: str = "low"
     # Low but not zero: narration must stay close to the supplied numbers, and a
     # temperature of 0 makes every country's prose read identically.
     llm_temperature: float = 0.2
@@ -171,6 +193,11 @@ class Settings(BaseSettings):
     rag_min_similarity: float = 0.25
     rag_context_turns: int = 4
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+
+    @property
+    def google_api_key(self) -> str | None:
+        """The Gemini key, under whichever of the two names it was supplied."""
+        return self.google_agent_platform_api_key or self.google_ai_studio_api_key
 
     @property
     def cors_origin_list(self) -> list[str]:

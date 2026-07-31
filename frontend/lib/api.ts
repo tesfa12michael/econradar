@@ -170,7 +170,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
   groq: 'Groq',
   openrouter: 'OpenRouter',
   gemini_flash: 'Gemini Flash',
-  qwen3_vl_openrouter: 'Qwen3-VL',
+  qwen3_vl_dashscope: 'Qwen3-VL',
 };
 
 export function modelLabel(model: string | null | undefined): string {
