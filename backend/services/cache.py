@@ -76,7 +76,9 @@ TASK_RAG_ANSWER = "rag_answer"
 #: 5 — the agent prompt now forbids Markdown. The chat panel renders answers as
 #:     plain text (`whitespace-pre-line`), so cached answers containing `**bold**`
 #:     display their asterisks; every one of them has to be retired to fix it.
-PROMPT_REVISION = 5
+#: 6 — asking was not enough. `agent.strip_markup` now enforces it, and the few
+#:     entries written under revision 5 still carry their asterisks.
+PROMPT_REVISION = 6
 
 
 def ttl_for(task_type: str) -> dt.timedelta:

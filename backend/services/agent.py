@@ -105,6 +105,41 @@ _NEGATIVE_UNIVERSAL_RE = re.compile(
 )
 
 
+# ── presentation ─────────────────────────────────────────────────────────────
+# The chat panel renders an answer with `whitespace-pre-line` and no Markdown, by
+# decision #26: extend `components/ui.tsx` rather than adopt a component library.
+# Mistral writes Markdown regardless of being asked not to — measured, in a browser,
+# after the prompt rule was added and deployed:
+#
+#     EconRadar's Japan unemployment series begins in **1991** … \[1\].
+#
+# So the prompt asks and this enforces. Stripping presentation markup is not the
+# repair `groundedness.py` refuses to do: no digit, word or claim changes, and the
+# same normalised string is what gets verified, cached and displayed — one text,
+# three consumers, which is the rule everywhere else here.
+
+_MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+", re.MULTILINE)
+_MD_BULLET_RE = re.compile(r"^(\s*)[-*+]\s+", re.MULTILINE)
+_MD_BOLD_RE = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1", re.DOTALL)
+_MD_ITALIC_RE = re.compile(r"(?<![\w*])[*_](?=\S)([^*_\n]+?)(?<=\S)[*_](?![\w*])")
+_MD_CODE_RE = re.compile(r"`+([^`\n]+?)`+")
+#: Unescaped last, so `\*` becomes a literal asterisk rather than being read as
+#: emphasis by the rules above.
+_MD_ESCAPE_RE = re.compile(r"\\([\\`*_{}\[\]()#+\-.!])")
+
+
+def strip_markup(text: str) -> str:
+    """Markdown out, meaning untouched."""
+    if not text:
+        return text
+    text = _MD_HEADING_RE.sub("", text)
+    text = _MD_BULLET_RE.sub(r"\1• ", text)
+    text = _MD_BOLD_RE.sub(r"\2", text)
+    text = _MD_ITALIC_RE.sub(r"\1", text)
+    text = _MD_CODE_RE.sub(r"\1", text)
+    return _MD_ESCAPE_RE.sub(r"\1", text).strip()
+
+
 def asks_for_a_ranking(question: str) -> bool:
     """Whether a question is superlative enough to need the whole dataset."""
     stripped = _NOT_SUPERLATIVE_RE.sub(" ", question or "")
@@ -392,7 +427,9 @@ async def run_agent(
         seen_results = len(results)
 
     answer = AgentAnswer(
-        text=(final.get("answer") or "").strip(),
+        # Normalised before anything reads it, so the guard below, the verifier, the
+        # cache and the reader all see the same string.
+        text=strip_markup(final.get("answer") or ""),
         provider=final.get("provider"),
         model=final.get("model"),
         results=list(final.get("results", [])),

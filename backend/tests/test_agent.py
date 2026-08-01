@@ -761,6 +761,42 @@ def test_a_signed_tool_call_still_goes_back_as_a_function_call():
     assert contents[1]["parts"][0]["functionResponse"]["name"] == RANK_COUNTRIES
 
 
+# ── presentation ─────────────────────────────────────────────────────────────
+
+
+def test_markdown_is_stripped_because_the_panel_does_not_render_it():
+    """Verbatim from a live answer, seen in a browser after the prompt had already
+    been told not to use Markdown and deployed. Asking a model politely is not a
+    mechanism."""
+    from services.agent import strip_markup
+
+    assert strip_markup(
+        "EconRadar's Japan unemployment series begins in **1991**, so it holds no "
+        "figures for the 1960s \\[1\\]."
+    ) == (
+        "EconRadar's Japan unemployment series begins in 1991, so it holds no "
+        "figures for the 1960s [1]."
+    )
+
+
+def test_stripping_markup_changes_no_figure():
+    from services.agent import strip_markup
+
+    text = strip_markup("1. **Venezuela**: 308.7% of GDP in 2025 \\[1\\].\n* _Eritrea_: 260.4%")
+    assert "308.7" in text and "260.4" in text and "2025" in text
+    assert "*" not in text and "_" not in text and "\\" not in text
+    assert text.splitlines()[1].startswith("• ")
+
+
+def test_a_lone_asterisk_or_underscore_is_left_alone():
+    """Over-eager stripping would mangle the prose it is meant to tidy."""
+    from services.agent import strip_markup
+
+    assert strip_markup("The 2 * 3 case and snake_case_names survive.") == (
+        "The 2 * 3 case and snake_case_names survive."
+    )
+
+
 def test_citations_come_from_tool_results_not_similarity():
     citations = chat_module.citations_for([_observation_result()])
     assert len(citations) == 1
