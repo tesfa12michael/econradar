@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from logging_config import get_logger
 from models import CountryProfile
+from services.context import fmt
 from services.rankings import (
     IndicatorResolution,
     list_indicator_metadata,
@@ -515,11 +516,13 @@ async def run_query_observations(session: AsyncSession, args: dict[str, Any]) ->
             "truncated": truncated,
             **({"requested_window": window} if window else {}),
             "observations": [
-                {
-                    "date": str(r.observation_date),
-                    "value": float(r.value),
-                    "source": r.source,
-                }
+                # Rounded once, here, so the model and the verifier read the same
+                # digits — the discipline services/context.py has always applied to
+                # narration, arriving late because the tools returned raw columns.
+                # Without it the prompt's "copy the digits exactly" is obeyed
+                # literally: Gemini reported Nigeria's inflation as
+                # 23.0101235833333%, which is precision the source does not have.
+                {"date": str(r.observation_date), "value": fmt(float(r.value)), "source": r.source}
                 for r in rows
             ],
         },
@@ -630,7 +633,9 @@ async def run_rank_countries(session: AsyncSession, args: dict[str, Any]) -> Too
                     "rank": e.rank,
                     "country_code": e.country_code,
                     "country_name": e.country_name,
-                    "value": e.value,
+                    # Display precision only — the order was decided in SQL on the
+                    # full-precision column, so rounding here cannot reorder anything.
+                    "value": fmt(e.value),
                     "observation_date": str(e.observation_date),
                     "source": e.source,
                 }

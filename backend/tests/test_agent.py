@@ -625,6 +625,16 @@ async def test_rows_inside_the_window_still_answer_normally(monkeypatch):
     assert "no_data_in_requested_window" not in result.payload
 
 
+async def test_a_value_is_rounded_before_the_model_sees_it(monkeypatch):
+    """One object, two consumers. Told to "copy the digits exactly", Gemini reported
+    Nigeria's inflation as 23.0101235833333% — precision the World Bank does not
+    have. Rounding at the tool keeps the model and the verifier reading the same
+    number, which is the rule narration has followed since decision #8."""
+    session = _FakeSession([_row("2025-01-01", 23.0101235833333)], (44, "1981-01-01", "2025-01-01"))
+    result = await _query(monkeypatch, session, {"country": "NGA", "indicator": "inflation"})
+    assert result.payload["observations"][0]["value"] == 23.0
+
+
 async def test_an_ambiguous_indicator_returns_the_choices_not_a_guess(monkeypatch):
     """A tool that picks for the model is a tool that decides what the question was."""
     from schemas import IndicatorMetadataOut
