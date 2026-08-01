@@ -79,6 +79,22 @@ class IndicatorCatalog(Base):
     frequency: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
 
+    # Measurement metadata (migration 0011). These are what let a caller tell a
+    # year-over-year change from a level, a year-end stock from an annual average,
+    # and general government from central government — distinctions the indicator
+    # name does not reliably carry and that nothing downstream could previously see.
+    # Constrained to closed vocabularies in SQL; NULL is legal so a newly ingested
+    # indicator is not rejected, and a test fails when one is left unclassified.
+    concept: Mapped[str | None] = mapped_column(Text)
+    metric_type: Mapped[str | None] = mapped_column(Text)
+    transformation: Mapped[str | None] = mapped_column(Text)
+    observation_basis: Mapped[str | None] = mapped_column(Text)
+    price_basis: Mapped[str | None] = mapped_column(Text)
+    coverage_definition: Mapped[str | None] = mapped_column(Text)
+    seasonal_adjustment: Mapped[str | None] = mapped_column(Text)
+    is_primary_for_concept: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    comparability_notes: Mapped[str | None] = mapped_column(Text)
+
     source: Mapped[DataSource] = relationship(lazy="raise")
 
 

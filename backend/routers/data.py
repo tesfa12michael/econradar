@@ -14,12 +14,16 @@ from db import get_session
 from schemas import (
     AnomalyOut,
     CountryOut,
+    IndicatorMetadataOut,
     IndicatorOptionOut,
     IndicatorSeriesOut,
     IndicatorSummaryOut,
     MapDataOut,
+    RankingOut,
     SourceStatusOut,
 )
+from services import rankings
+from services.rankings import MAX_ENTRIES
 
 router = APIRouter(tags=["data"])
 
@@ -52,6 +56,73 @@ async def get_indicator_options(
 ) -> list[IndicatorOptionOut]:
     """Every indicator that has data, ordered by how many countries it covers."""
     return await repositories.list_indicator_options(session)
+
+
+@router.get("/indicator-metadata", response_model=list[IndicatorMetadataOut])
+async def get_indicator_metadata(
+    concept: str | None = Query(
+        default=None, description="Filter to one concept, e.g. unemployment or government_debt"
+    ),
+    session: AsyncSession = Depends(get_session),
+) -> list[IndicatorMetadataOut]:
+    """What every ingested indicator measures, and how far it reaches.
+
+    This is the catalog a caller consults *before* asking for a number, so that it
+    picks between three unemployment series knowing one is an ILO-modelled estimate
+    across 187 countries and another is a national definition across 118. Primary
+    series first, then widest coverage.
+    """
+    return await rankings.list_indicator_metadata(session, concept=concept)
+
+
+@router.get("/rankings/{indicator}", response_model=RankingOut)
+async def get_rankings(
+    indicator: str,
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    limit: int | None = Query(
+        default=None, ge=1, le=MAX_ENTRIES, description="Trim the response; the count stays whole"
+    ),
+    max_age_years: int | None = Query(
+        default=None,
+        ge=1,
+        le=100,
+        description="Drop countries whose latest reading is older than this",
+    ),
+    session: AsyncSession = Depends(get_session),
+) -> RankingOut:
+    """Every country ranked on one indicator by its most recent value.
+
+    `indicator` accepts an indicator code (`GGXWDG_NGDP`) or a concept
+    (`government_debt`), and a concept resolves to the series marked primary for it
+    — a choice recorded in the database with its reasoning rather than improvised
+    per question.
+
+    The ranking is always computed over the full dataset. `limit` trims the
+    response after the fact and sets `truncated`, while `country_count` continues to
+    report the size of the whole ranking, so a top-five request can never be
+    mistaken for a statement about the world.
+    """
+    result = await rankings.rank_countries(
+        session, indicator, order=order, limit=limit, max_age_years=max_age_years
+    )
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No indicator or concept matches {indicator!r}. "
+            "GET /api/v1/indicator-metadata lists everything available.",
+        )
+    if not result.entries:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{result.indicator.indicator_code} has no observations matching that filter."
+            + (
+                f" max_age_years={max_age_years} may have excluded every country; "
+                f"the series' most recent reading is {result.indicator.latest_date}."
+                if max_age_years is not None
+                else ""
+            ),
+        )
+    return result
 
 
 @router.get("/map", response_model=MapDataOut)

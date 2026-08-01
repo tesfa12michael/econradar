@@ -135,6 +135,81 @@ class IndicatorOptionOut(BaseModel):
     country_count: int = 0
 
 
+class IndicatorMetadataOut(BaseModel):
+    """What an indicator actually measures (migration 0011).
+
+    Everything here exists because the indicator *name* does not carry it reliably.
+    "Unemployment, total (% of total labor force)" appears three times in this
+    catalog under three different definitions, and "debt (% of GDP)" twice over two
+    different slices of government. A caller that cannot see these fields cannot
+    know it is comparing incomparable numbers — which is the whole reason they exist.
+    """
+
+    indicator_code: str
+    indicator_name: str
+    source: str
+    unit: str | None = None
+    frequency: str | None = None
+    category: str | None = None
+    concept: str | None = None
+    metric_type: str | None = None
+    transformation: str | None = None
+    observation_basis: str | None = None
+    price_basis: str | None = None
+    coverage_definition: str | None = None
+    seasonal_adjustment: str | None = None
+    #: The series to use when a question names a concept but not an indicator.
+    is_primary_for_concept: bool = False
+    comparability_notes: str | None = None
+    country_count: int = 0
+    observation_count: int = 0
+    earliest_date: dt.date | None = None
+    latest_date: dt.date | None = None
+
+
+class RankingEntryOut(BaseModel):
+    """One country's place in a global ranking.
+
+    `observation_date` is per country and not optional. Coverage genuinely differs —
+    Eritrea's most recent debt reading is from 2019 while Japan's is from 2026 — and
+    a ranking that hides that invites a reader to treat both as current.
+    """
+
+    rank: int
+    country_code: str
+    country_name: str | None = None
+    region: str | None = None
+    value: float
+    observation_date: dt.date
+    source: str
+
+
+class RankingOut(BaseModel):
+    """Every country ranked on one indicator (the fix for answering "highest" from a
+    retrieved fragment).
+
+    `country_count` is the size of the **whole** ranking and is reported even when
+    `entries` has been truncated by `limit`, with `truncated` saying so outright. A
+    caller asking for the top five is therefore told it is looking at five of 194,
+    which is the difference between "the highest in the world" being a claim about
+    the dataset and being a claim about whatever happened to be retrieved.
+
+    `alternative_indicators` names the other series measuring the same concept. A
+    debt ranking built on general government debt is a different ranking from one
+    built on central government debt, and a caller that cannot see the other exists
+    will not know to say which it used.
+    """
+
+    indicator: IndicatorMetadataOut
+    order: str  # "desc" | "asc"
+    country_count: int
+    truncated: bool = False
+    earliest_observation: dt.date | None = None
+    latest_observation: dt.date | None = None
+    entries: list[RankingEntryOut]
+    alternative_indicators: list[IndicatorMetadataOut] = []
+
+
 class ForecastPointOut(BaseModel):
     """One projected period. `lower`/`upper` are the p10/p90 bounds."""
 

@@ -31,9 +31,10 @@ known-first-party = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "-m 'not network' -q"
+addopts = "-m 'not network and not database' -q"
 markers = [
     "network: test performs a real outbound network call (deselected by default; run with -m network)",
+    "database: test queries the live Supabase database (deselected by default; run with -m database). These check things only real data can show — that no ingested indicator was left unclassified, and that the views agree with the table underneath them.",
 ]
 testpaths = ["tests"]
 pythonpath = ["."]

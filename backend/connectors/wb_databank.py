@@ -32,10 +32,14 @@ GEM_INDICATORS: dict[str, tuple[str, str, ValueKind]] = {
         "LCU/US$",
         ValueKind.CURRENCY,
     ),
-    # The seasonally-adjusted median-weighted variant (CPTOTSAXMZGY) is null for most
-    # countries; this one carries actual observations.
+    # The N is *nominal*, distinguishing this from CPTOTSAXMZGY, the median-weighted
+    # variant the World Bank computes for geographic aggregates and which is null for
+    # most individual countries. Both are seasonally adjusted — the name the catalog
+    # picked up at first ingestion says "not seas. adj.", which is an older World Bank
+    # label the API no longer returns. Checked against the live indicator metadata on
+    # 2026-08-01; migration 0011 records the corrected classification.
     "CPTOTSAXNZGY": (
-        "CPI price, % year-on-year",
+        "CPI Price, % y-o-y, nominal, seas. adj.",
         "%",
         ValueKind.PERCENT_CHANGE,
     ),
