@@ -140,6 +140,23 @@ def _is_calendar_year(value: float) -> bool:
     return float(value).is_integer() and 1800 <= value <= 2200
 
 
+def _names_a_decade(value: float, allowed: set[float]) -> bool:
+    """Whether `value` is the decade a supplied year falls in — "the 1990s" for 1994.
+
+    Deliberately narrow: the literal must end in a zero and share a decade with a
+    year in the evidence. `2031` shares neither property with `2026`, so the check
+    that matters is unaffected.
+    """
+    if value % 10 != 0:
+        return False
+    decade = int(value) // 10
+    return any(
+        _is_calendar_year(base) and int(base) // 10 == decade
+        for base in allowed
+        if isinstance(base, (int, float))
+    )
+
+
 # Rescalings a narrator may legitimately apply to a supplied value: writing
 # 3.4 trillion for 3_400_000_000_000. Grounding these can only ever match a real
 # number under a unit change, never invent one.
@@ -233,13 +250,26 @@ def _matches(value: float, allowed: set[float], tolerance: float) -> bool:
     places, or the same quantity at a different scale (billions for units). Nothing
     here can ground a number that is not derived from a supplied one.
     """
+    # A relative band is the right tolerance for a measurement that was rounded for
+    # readability. It is the wrong one for a year: 0.5% of 2026 is ten years, so
+    # "308.7% in 2031" was grounded by a 2026 observation. Found by the adversarial
+    # battery, and it is a meaning error of exactly the kind the numeric check exists
+    # to catch. Exact equality and rounding still apply, so a genuine measurement
+    # that happens to land in this range ("$2,025 per capita" from 2024.7) is
+    # unaffected.
+    year_like = _is_calendar_year(value)
+    if year_like and _names_a_decade(value, allowed):
+        # "outside the 1990s" over evidence dated 1994. A decade is an honest way to
+        # refer to a period the evidence covers, and the first draft of the year rule
+        # rejected it — the same false positive as the 1960s case, in a new place.
+        return True
     for scale in _SCALES:
         target = value * scale
         for candidate in (target, value):
             for base in allowed:
                 if base == candidate:
                     return True
-                if abs(base - candidate) <= max(tolerance * abs(base), 1e-9):
+                if not year_like and abs(base - candidate) <= max(tolerance * abs(base), 1e-9):
                     return True
                 # The narrator rounded: 3.42 -> "3.4", 1234.7 -> "1,235".
                 for places in range(0, 5):
