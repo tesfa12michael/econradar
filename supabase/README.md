@@ -12,6 +12,12 @@ a one-time choice (see below).
 | 3 (alt) | `migrations/0003b_partitioning_manual_fallback.sql` | **Fallback** — use only if step 3a's `create extension pg_partman` fails. |
 | 4 | `seeds/0004_seed_reference.sql` | `data_sources` + `indicators_catalog`. |
 | 5 | `seeds/0005_seed_country_profiles.sql` | 217 `country_profiles` (generated from the World Bank registry). |
+| 6+ | `migrations/0006`–`0013` | Later changes, applied in numeric order. Each file says what it does and why at the top. |
+
+`0013_retire_rag_corpus.sql` **drops the `embeddings` table**, so a fresh database
+that runs every file in order ends with 9 tables, not 10 — 0002 creates it and 0013
+removes it. Running the whole sequence on a new project is still correct; the corpus
+simply no longer exists on either path.
 
 ## The partitioning decision (read before step 3)
 
@@ -29,12 +35,12 @@ Record which path you took in `PROGRESS.md`.
 ## Verify
 
 ```sql
--- 10 base tables present?
+-- 9 base tables present?
 select count(*) from information_schema.tables
 where table_schema = 'public'
   and table_name in ('data_sources','indicators_catalog','country_profiles','time_series',
-                     'anomalies','pipeline_runs','etl_errors','llm_cache','forecast_cache','embeddings');
--- expect 10
+                     'anomalies','pipeline_runs','etl_errors','llm_cache','forecast_cache');
+-- expect 9
 
 -- time_series is partitioned + has children?
 select count(*) from pg_inherits

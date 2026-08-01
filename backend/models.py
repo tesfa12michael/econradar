@@ -3,7 +3,9 @@ supabase/migrations/. The database is created and owned by those SQL migrations
 (never by ORM `create_all`); these classes exist only for queries and inserts.
 
 Every table in docs/architecture.md's schema outline is mapped: Phase 1 mapped the
-ingestion tables, Phase 3 added the AI ones (llm_cache, forecast_cache, embeddings).
+ingestion tables, Phase 3 added the AI ones (llm_cache, forecast_cache). The
+`embeddings` mapping was dropped with the table it described — see migration 0013
+and decision #40.
 """
 
 from __future__ import annotations
@@ -11,7 +13,6 @@ from __future__ import annotations
 import datetime as dt
 import uuid
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     Date,
@@ -27,10 +28,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
-# Sentence-Transformers all-MiniLM-L6-v2 and Mistral Embed are both reduced to this
-# width so one pgvector column serves either provider — see decision #23.
-EMBEDDING_DIM = 384
 
 _UUID_PK = {"primary_key": True, "server_default": text("gen_random_uuid()")}
 _NOW = {"server_default": text("now()")}
@@ -219,27 +216,6 @@ class ForecastCache(Base):
     expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class Embedding(Base):
-    """RAG corpus chunk + its vector (feature 2.2).
-
-    `chunk_text` is the retrieved evidence the answer must cite, so it holds the
-    already-formatted numbers rather than a reference to them — the LLM reads what
-    is in this column and nothing else.
-    """
-
-    __tablename__ = "embeddings"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid, **_UUID_PK)
-    # Stable per-chunk identity so the weekly rebuild upserts rather than
-    # duplicating or emptying the corpus (supabase/migrations/0010).
-    chunk_key: Mapped[str] = mapped_column(Text, unique=True)
-    country_code: Mapped[str | None] = mapped_column(String(3))
-    indicator_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("indicators_catalog.id", ondelete="CASCADE")
-    )
-    chunk_text: Mapped[str] = mapped_column(Text)
-    chunk_type: Mapped[str | None] = mapped_column(Text)
-    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
-    date_range_start: Mapped[dt.date | None] = mapped_column(Date)
-    date_range_end: Mapped[dt.date | None] = mapped_column(Date)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), **_NOW)
+# The `Embedding` mapping lived here. Migration 0013 dropped the table it
+# described, so the class went with it — a model for a table that does not exist
+# is not documentation, it is a trap for the next person writing a query.

@@ -31,11 +31,6 @@ APScheduler>=3.10,<4.0
 # The Chronos-2 weights themselves live in the Modal image, never on this box.
 modal>=1.5,<2
 
-# pgvector's SQLAlchemy types — maps the existing embeddings.embedding vector(384)
-# column (feature 2.2). Pure Python, no compiled extension. A hard import in
-# models.py, so it is a runtime dependency rather than a lazy one.
-pgvector>=0.3,<1
-
 # Nixtla StatsForecast — the last step of the forecasting cascade, and the ONLY one
 # that runs on this box (decision #22). Imported lazily inside the fallback path, so
 # numba/numpy cost nothing until Modal is actually unreachable.
@@ -45,12 +40,10 @@ statsforecast>=2.0,<3
 # FastAPI's ecosystem, declared here because prompts depend on it directly.
 jinja2>=3.1,<4
 
-# fastembed — runs sentence-transformers/all-MiniLM-L6-v2 (384-d, the width the
-# embeddings table was created at) through onnxruntime instead of torch. Decision
-# #23: local-first embeddings mean retrieval has no external dependency and no
-# shared rate limit, and ONNX keeps ~1 GB of torch off a 2 GB box. Loaded lazily,
-# so a deployment that never serves a chat query never pays for it.
-fastembed>=0.4,<1
+# `pgvector` and `fastembed` were removed here (decision #40) along with the
+# retrieval path that was their only caller. fastembed pulls onnxruntime and the
+# MiniLM weights — ~200 MB on a box with 32 GB free but 2 GB of RAM — and nothing
+# has embedded a sentence since the chatbot became an agent over SQL.
 
 # LangGraph — the chatbot's agent loop (decision #38). Graph and state machine
 # only: the model calls still go through services/providers.py over raw httpx, so

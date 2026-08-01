@@ -19,7 +19,10 @@ from services.semantics import (
     is_extreme,
 )
 
-# The corpus as `rag_index` now writes it: transitions, coverage, regime note.
+# Evidence carrying its facts as prose rather than as fields: transitions,
+# coverage, regime note. Written by the RAG corpus decision #40 retired, and kept
+# as a fixture because free text still reaches the verifier — `comparability_notes`
+# and `anomalies.llm_explanation` are strings inside structured contexts.
 BRAZIL = {
     "evidence": [
         {
@@ -187,9 +190,9 @@ def test_a_structural_break_asserts_no_direction():
     assert collect_direction_facts(context) == []
 
 
-def test_transition_pairs_are_read_out_of_the_chunk_phrasing():
-    """`rag_index` and this module agree on one sentence shape; if they drift, the
-    extreme-value rule starts rejecting correct transitions."""
+def test_transition_pairs_are_read_out_of_prose():
+    """A move stated in text must bind the answer as tightly as one stated in fields.
+    Without this, the extreme-value rule starts rejecting correct transitions."""
     pairs = collect_transition_pairs(BRAZIL)
     assert (15406.0, 70.8) in pairs
     assert (18.0, 21.0) in pairs

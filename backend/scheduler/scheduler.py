@@ -22,7 +22,6 @@ from db import normalize_db_url
 from logging_config import get_logger
 from scheduler.jobs import (
     run_bis_refresh,
-    run_embeddings_refresh,
     run_forecast_refresh,
     run_fred_refresh,
     run_imf_refresh,
@@ -34,7 +33,20 @@ logger = get_logger(__name__)
 
 WORLD_BANK_JOB_ID = "world_bank_refresh"
 FORECAST_JOB_ID = "forecast_refresh"
-EMBEDDINGS_JOB_ID = "embeddings_refresh"
+
+#: Jobs that used to exist and no longer do. The store persists a job by its
+#: ``module:qualname`` reference, so deleting the callable is not enough — the row
+#: outlives the code. APScheduler would eventually drop such a job itself, on the
+#: first attempt to reconstitute it, with a warning nobody reads; that is a silent
+#: failure wearing a log line. Retiring it here is explicit, happens on the first
+#: boot after deploy, and says why in the log.
+RETIRED_JOB_IDS: frozenset[str] = frozenset(
+    {
+        # The weekly pgvector corpus rebuild. Decision #40 removed the corpus it
+        # rebuilt; the cache sweep it carried moved to the forecast job.
+        "embeddings_refresh",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,13 +58,11 @@ class ScheduledSource:
 
 
 def _schedule() -> list[ScheduledSource]:
-    """Seven jobs: five ingestions, plus forecasting and the RAG corpus.
+    """Six jobs: five ingestions plus forecasting.
 
-    Hours are staggered so a 1 vCPU box never runs two of them at once. The two
-    derived jobs come last on Monday and in dependency order — forecasts after the
-    weekly World Bank and IMF ingestions so they project from the freshest history,
-    then the corpus rebuild after that, so the chat retrieves the current numbers
-    rather than last week's.
+    Hours are staggered so a 1 vCPU box never runs two of them at once. The derived
+    job comes last on Monday, after the weekly World Bank and IMF ingestions, so it
+    projects from the freshest history.
     """
     return [
         ScheduledSource(
@@ -95,16 +105,29 @@ def _schedule() -> list[ScheduledSource]:
             run_forecast_refresh,
             {"trigger": "cron", "day_of_week": "mon", "hour": 9},
         ),
-        ScheduledSource(
-            EMBEDDINGS_JOB_ID,
-            "RAG corpus rebuild (pgvector embeddings)",
-            run_embeddings_refresh,
-            {"trigger": "cron", "day_of_week": "mon", "hour": 11},
-        ),
     ]
 
 
 _scheduler: AsyncIOScheduler | None = None
+
+
+def _retire_removed_jobs(scheduler: AsyncIOScheduler) -> list[str]:
+    """Delete persisted jobs whose callable no longer exists. Returns what it removed.
+
+    The mirror image of the add-only-if-absent rule above: persistence is the point
+    of this job store, and persistence cuts both ways. A job added on one deploy
+    outlives the code that defined it, so removing the function is only half of
+    removing the job.
+    """
+    removed: list[str] = []
+    for job_id in sorted(RETIRED_JOB_IDS):
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            continue  # not in the store: already retired, or never ran here
+        removed.append(job_id)
+        logger.info("Removed retired scheduled job %r from the persistent store.", job_id)
+    return removed
 
 
 def start_scheduler() -> AsyncIOScheduler | None:
@@ -130,6 +153,8 @@ def start_scheduler() -> AsyncIOScheduler | None:
         job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 3600},
     )
     scheduler.start()  # loads any persisted jobs from Postgres into memory
+
+    _retire_removed_jobs(scheduler)
 
     for source in _schedule():
         if scheduler.get_job(source.job_id) is None:

@@ -29,7 +29,6 @@ from logging_config import get_logger
 from services import refresh_anomalies
 from services.cache import prune_expired
 from services.forecast_store import refresh_forecasts
-from services.rag_index import refresh_corpus
 
 logger = get_logger(__name__)
 
@@ -102,52 +101,36 @@ async def run_wb_databank_refresh() -> dict:
 async def run_forecast_refresh() -> dict:
     """Pre-compute forecasts for the covered countries (feature 1.4) — weekly.
 
-    The sixth job, and the first that is not an ingestion. It runs after the weekly
-    ingestions so it forecasts the freshest history, and it is what keeps the Modal
-    round trip off the request path: by the time anyone opens a profile page, the
-    forecast is already in `forecast_cache`.
+    The sixth and last job, and the only one that is not an ingestion. It runs after
+    the weekly ingestions so it forecasts the freshest history, and it is what keeps
+    the Modal round trip off the request path: by the time anyone opens a profile
+    page, the forecast is already in `forecast_cache`.
 
     Like the ingestion jobs it reports rather than raises — a Modal outage must
     leave the scheduler running and the site serving cached forecasts.
+
+    It also carries the cache sweep, which it inherited from the RAG corpus job that
+    decision #40 retired. Attaching it to an existing weekly job rather than adding
+    a seventh is the same reasoning the corpus job carried it under; this is now the
+    last job of the week, which is where a sweep belongs.
     """
     try:
         summary = await refresh_forecasts(get_session_factory())
     except Exception as exc:
         logger.exception("scheduled forecast refresh failed")
         return {"job": "forecast", "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
-    logger.info("scheduled forecast refresh complete: %s", summary)
-    return {"job": "forecast", "status": "success", **summary}
-
-
-async def run_embeddings_refresh() -> dict:
-    """Rebuild the RAG corpus from current data (feature 2.2) — weekly.
-
-    The seventh job. It runs last on Monday because every chunk it writes restates
-    stored observations: rebuilding before the week's ingestion would embed last
-    week's numbers and leave the chat answering from them for seven days.
-
-    The refresh upserts by `chunk_key` (migration 0010), so the corpus stays
-    complete and queryable throughout — there is no window where chat retrieves
-    nothing because the index is mid-rebuild.
-    """
-    try:
-        summary = await refresh_corpus(get_session_factory())
-    except Exception as exc:
-        logger.exception("scheduled embeddings refresh failed")
-        return {"job": "embeddings", "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
 
     # Reclaim superseded AI responses while we are already here (decision #31).
     # Content-addressed keys mean a stale entry is never served again, but nothing
-    # deletes it either; this is the only sweep, and it is deliberately attached to
-    # an existing job rather than becoming an eighth.
+    # deletes it either; this is the only sweep in the system.
     pruned = 0
     try:
         async with get_session_factory()() as session:
             pruned = await prune_expired(session)
     except Exception:
-        # A failed sweep is a housekeeping problem, not a corpus problem: the
+        # A failed sweep is a housekeeping problem, not a forecasting problem: the
         # refresh above already succeeded and must still be reported as such.
-        logger.exception("cache prune failed after the embeddings refresh")
+        logger.exception("cache prune failed after the forecast refresh")
 
-    logger.info("scheduled embeddings refresh complete: %s (pruned %d cache rows)", summary, pruned)
-    return {"job": "embeddings", "status": "success", **summary, "cache_rows_pruned": pruned}
+    logger.info("scheduled forecast refresh complete: %s (pruned %d cache rows)", summary, pruned)
+    return {"job": "forecast", "status": "success", **summary, "cache_rows_pruned": pruned}

@@ -241,10 +241,13 @@ _CHANGE_OF_RE = re.compile(
     re.IGNORECASE,
 )
 
-#: The canonical transition sentence `rag_index` writes into every anomaly chunk.
-#: Parsed rather than guessed at: this module and the chunk builder agree on one
-#: phrasing, so retrieval evidence carries the same directional facts a structured
-#: context does.
+#: A transition stated in prose: "fell from 15406.0% in 1994-06-01 to 70.8%".
+#: Written for the RAG corpus that decision #40 retired, and kept because the
+#: evidence a model is shown is not always structured — `comparability_notes` and
+#: the anomaly `explanation` column are free text inside otherwise structured
+#: contexts, and a directional claim in one of them should still bind the answer.
+#: Deleting a verifier rule because its best-known producer is gone would be
+#: loosening the check as a side effect of a cleanup.
 _TRANSITION_RE = re.compile(
     r"\b(?P<dir>rose|fell)\s+from\s+"
     r"(?P<from>[-+]?[\d,]*\.?\d+)\s*\S*\s+in\s+(?P<from_date>\d{4}-\d{2}-\d{2})\s+to\s+"
@@ -332,10 +335,10 @@ def collect_direction_facts(context: Any) -> list[DirectionFact]:
     """Every directional claim the model was given, from wherever it was given.
 
     Walks the same context object the numeric verifier walks, so the two checks can
-    never disagree about what the model saw. Structured contexts (narration, anomaly
-    explanations, chart interpretation) carry `deviation_type` and `changes`;
-    retrieval evidence carries prose, and the prose it carries is written by
-    `rag_index` to a phrasing this module parses.
+    never disagree about what the model saw. Structured contexts (anomaly
+    explanations, chart interpretation, the agent's tool payloads) carry
+    `deviation_type` and `changes`; free-text fields inside them are read for the
+    prose phrasings below.
     """
     facts: list[DirectionFact] = []
     unit_hint: list[str | None] = [None]
