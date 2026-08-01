@@ -48,6 +48,7 @@ from services.cache import (
     store_response,
 )
 from services.groundedness import verify
+from services.telemetry import ChatTrace
 
 logger = get_logger(__name__)
 
@@ -167,6 +168,11 @@ async def stream_chat(
         yield {"type": "done"}
         return
 
+    # Assembled as the request happens and emitted exactly once, at whichever exit
+    # is taken — there are six, and an early return that skipped the line would make
+    # the counters describe only the happy path (decision #45).
+    trace = ChatTrace(question_chars=len(question))
+
     answer: AgentAnswer | None = None
     results: list[ToolResult] = []
     async for kind, item in run_agent(session, question, history or []):
@@ -175,6 +181,15 @@ async def stream_chat(
             yield {"type": "tool", "name": item.name, "summary": item.summary(), "ok": item.ok}
         else:
             answer = item
+
+    trace.tools = [r.name for r in results]
+    trace.tool_failures = sum(1 for r in results if not r.ok)
+    if answer is not None:
+        trace.provider, trace.model = answer.provider, answer.model
+        trace.fallbacks = list(answer.attempts)
+        trace.rows, trace.ranked = answer.rows_read, answer.called_ranking
+        trace.countries_ranked = answer.countries_ranked
+        trace.seconds, trace.timed_out = answer.seconds, answer.timed_out
 
     citations = citations_for(results)
     yield {"type": "citations", "citations": [asdict(c) for c in citations]}
@@ -204,6 +219,10 @@ async def stream_chat(
             "model": "data-absent",
             "cached": False,
         }
+        # Counted apart from a retraction on purpose. Both withhold a figure, and
+        # only one of them means something went wrong.
+        trace.outcome, trace.grounded = "absent", True
+        trace.emit()
         yield {"type": "done"}
         return
 
@@ -222,6 +241,9 @@ async def stream_chat(
             "cached": False,
             "reason": reason,
         }
+        trace.outcome = "timeout" if (answer and answer.timed_out) else "refused"
+        trace.reason = reason
+        trace.emit()
         yield {"type": "done"}
         return
 
@@ -242,6 +264,10 @@ async def stream_chat(
             "model": hit.model,
             "cached": True,
         }
+        trace.outcome, trace.grounded, trace.cached = "answered", True, True
+        trace.groundedness = hit.groundedness_score
+        trace.provider, trace.model = hit.provider, hit.model
+        trace.emit()
         yield {"type": "done"}
         return
 
@@ -271,6 +297,9 @@ async def stream_chat(
             "cached": False,
             "reason": reason,
         }
+        trace.outcome, trace.reason = "retracted", reason
+        trace.groundedness = report.score
+        trace.emit()
         yield {"type": "done"}
         return
 
@@ -283,12 +312,10 @@ async def stream_chat(
         model=answer.model,
         groundedness_score=report.score,
     )
-    logger.info(
-        "chat answered: provider=%s tools=%d groundedness=%.2f",
-        answer.provider,
-        len(results),
-        report.score,
-    )
+    trace.outcome, trace.grounded = "answered", True
+    trace.groundedness = report.score
+    trace.derived_figures = len(report.extra.get("derived", []))
+    trace.emit()
     yield {
         "type": "verdict",
         "grounded": True,

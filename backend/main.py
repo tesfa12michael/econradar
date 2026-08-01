@@ -8,8 +8,9 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from config import settings
 from db import dispose_engine
@@ -51,6 +52,30 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    """Refuse an oversized body before anything reads it (decision #43).
+
+    The Pydantic schemas bound each *field*, which is the right place for the
+    limits a caller should be told about. This is the floor beneath them: a
+    100 MB body is rejected on its declared length, before FastAPI buffers it to
+    parse the JSON it would then reject field by field.
+
+    A missing `Content-Length` means a chunked upload, whose size is not knowable
+    in advance. That is out of scope here and is bounded instead by the reverse
+    proxy in front — noted rather than silently assumed safe.
+    """
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > settings.max_request_bytes:
+        logger.warning("rejected an oversized request: %s bytes to %s", declared, request.url.path)
+        return JSONResponse(
+            status_code=413,
+            content={"detail": f"Request body exceeds {settings.max_request_bytes} bytes."},
+        )
+    return await call_next(request)
+
 
 # Health + sanitized status at the root; data and intelligence APIs under /api/v1.
 app.include_router(health_router)

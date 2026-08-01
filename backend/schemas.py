@@ -10,7 +10,9 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from config import settings
 
 
 class TimeSeriesRecord(BaseModel):
@@ -278,7 +280,9 @@ class AnomalyExplanationOut(BaseModel):
 
 class ChatTurn(BaseModel):
     role: str  # user | assistant
-    content: str
+    # Bounded for the same reason the question is: a turn the trimmer would discard
+    # still has to be received and validated before it can be discarded.
+    content: str = Field(max_length=settings.chat_max_turn_chars)
 
 
 class ChatRequest(BaseModel):
@@ -286,11 +290,17 @@ class ChatRequest(BaseModel):
 
     History is supplied by the client and trimmed server-side to the documented
     four turns — it resolves pronouns and follow-ups, and is explicitly not
-    evidence: the prompt says so, and only retrieved chunks are verified against.
+    evidence: the prompt says so, and only tool results are verified against.
+
+    **Every field is bounded**, and the bounds are the first line of defence on a
+    public endpoint that spends free-tier quota. `trim_history` already discards
+    everything past four turns, so a thousand-turn history was never *used* — it was
+    still parsed, validated and held in memory first, which is the part an attacker
+    controls. Rejecting it at the schema costs one 422.
     """
 
-    question: str
-    history: list[ChatTurn] = []
+    question: str = Field(min_length=1, max_length=settings.chat_max_question_chars)
+    history: list[ChatTurn] = Field(default=[], max_length=settings.chat_max_history_turns)
 
 
 class CitationOut(BaseModel):
@@ -351,3 +361,7 @@ class StatusOut(BaseModel):
     anomalies_flagged: int = 0
     sources: list[SourceStatusOut]
     groundedness_verification: str = "active"
+    #: Aggregates only, and only about this process (decision #45). No question text,
+    #: no client addresses, nothing that identifies a caller — the same sanitisation
+    #: rule the rest of this payload follows.
+    chat: dict[str, Any] = {}

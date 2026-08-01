@@ -251,6 +251,41 @@ class Settings(BaseSettings):
     # server-side in services/agent.py, not trusted from the client.
     rag_context_turns: int = 4
 
+    # ── Chat abuse limits (decision #43) ──
+    # `POST /chat` is public, unauthenticated, and costs 2-3 model turns against
+    # free-tier quota on every cache miss. Every number here is a *ceiling on
+    # damage*, not a UX preference: the question is not "how much should a person
+    # ask" but "how much can one client spend before somebody notices".
+    chat_rate_limit_enabled: bool = True
+    #: Burst. Enough to ask, read, and follow up; not enough to script.
+    chat_rate_limit_per_minute: int = 6
+    #: Per-client daily ceiling. A genuine session is a handful of questions.
+    chat_rate_limit_per_day: int = 80
+    #: Whole-deployment daily ceiling — the one that actually protects the quota,
+    #: because the per-client limits are only as good as client identification.
+    chat_global_limit_per_day: int = 1500
+    #: Bounded so the limiter cannot itself become the memory exhaustion it prevents.
+    #: Oldest-seen clients are evicted first.
+    rate_limit_max_tracked_clients: int = 20_000
+    #: Request-shape ceilings, enforced by the schema and by a body-size middleware.
+    chat_max_question_chars: int = 1_000
+    chat_max_turn_chars: int = 4_000
+    chat_max_history_turns: int = 20
+    max_request_bytes: int = 64 * 1024
+    #: Wall-clock deadline for one question's whole agent loop. `agent_timeout_seconds`
+    #: bounds a single provider call; this bounds all of them together, so a request
+    #: cannot hold a connection while three providers each take their 90 seconds.
+    chat_request_timeout_seconds: float = 150.0
+    #: Where the real client IP is, in order of preference. The service listens on
+    #: 127.0.0.1 behind a Cloudflare Tunnel, so `request.client.host` is the tunnel
+    #: and `CF-Connecting-IP` is set by Cloudflare — a header a client cannot forge
+    #: through it. Empty means trust nothing but the socket.
+    client_ip_headers: str = "cf-connecting-ip,x-forwarded-for"
+
+    @property
+    def client_ip_header_list(self) -> list[str]:
+        return [h.strip().lower() for h in self.client_ip_headers.split(",") if h.strip()]
+
     @property
     def google_api_key(self) -> str | None:
         """The Gemini key, under whichever of the two names it was supplied."""

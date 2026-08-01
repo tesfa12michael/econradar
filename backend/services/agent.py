@@ -34,9 +34,11 @@ provider's format and the tool results already gathered are not thrown away.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import operator
 import re
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Annotated, Any, TypedDict
@@ -203,10 +205,34 @@ class AgentAnswer:
     results: list[ToolResult] = field(default_factory=list)
     attempts: list[str] = field(default_factory=list)
     failure: str | None = None
+    #: Wall-clock for the whole loop, and whether it was cut short by the deadline.
+    seconds: float = 0.0
+    timed_out: bool = False
 
     @property
     def called_ranking(self) -> bool:
         return any(r.name == RANK_COUNTRIES and r.ok for r in self.results)
+
+    @property
+    def rows_read(self) -> int:
+        """Observations plus ranking entries actually handed to the model.
+
+        Counted because an answer built on two rows describing a series of 481 was a
+        real defect (decision #32), and because rows are the closest proxy this layer
+        has for what a question cost.
+        """
+        total = 0
+        for result in self.results:
+            total += len(result.payload.get("observations", []))
+            total += len(result.payload.get("rankings", []))
+        return total
+
+    @property
+    def countries_ranked(self) -> int:
+        return max(
+            (r.payload.get("country_count", 0) for r in self.results if r.name == RANK_COUNTRIES),
+            default=0,
+        )
 
 
 def system_prompt() -> str:
@@ -419,12 +445,29 @@ async def run_agent(
 
     seen_results = 0
     final: dict[str, Any] = {}
-    async for update in AGENT_GRAPH.astream(state, config, stream_mode="values"):
-        final = update
-        results = update.get("results", [])
-        for result in results[seen_results:]:
-            yield "tool", result
-        seen_results = len(results)
+    started = time.monotonic()
+    timed_out = False
+    try:
+        # A deadline over the whole loop, not per call. `agent_timeout_seconds`
+        # bounds one provider request; three providers each taking theirs, twice
+        # round a tool loop, is minutes of a held connection on a public endpoint.
+        # `final` is reassigned every step, so a timeout keeps whatever the loop had
+        # reached rather than discarding completed tool calls.
+        async with asyncio.timeout(settings.chat_request_timeout_seconds):
+            async for update in AGENT_GRAPH.astream(state, config, stream_mode="values"):
+                final = update
+                results = update.get("results", [])
+                for result in results[seen_results:]:
+                    yield "tool", result
+                seen_results = len(results)
+    except TimeoutError:
+        timed_out = True
+        logger.warning(
+            "agent: timed out after %.0fs with %d tool result(s) — question=%r",
+            time.monotonic() - started,
+            seen_results,
+            question[:70],
+        )
 
     answer = AgentAnswer(
         # Normalised before anything reads it, so the guard below, the verifier, the
@@ -435,7 +478,16 @@ async def run_agent(
         results=list(final.get("results", [])),
         attempts=list(final.get("attempts", [])),
         failure=final.get("failure"),
+        seconds=round(time.monotonic() - started, 2),
+        timed_out=timed_out,
     )
+
+    if timed_out and not answer.text:
+        # Reported as a timeout rather than as "no answer", because the two need
+        # different responses: one is a slow provider, the other is a broken one.
+        answer.failure = (
+            f"the question took longer than {settings.chat_request_timeout_seconds:.0f}s to answer"
+        )
 
     # An answer with no tool call behind it came from the model's training data,
     # whatever it says. Caught live: asked "What is Japan's GDP?", the agent skipped

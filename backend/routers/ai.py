@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,7 @@ from schemas import (
     ForecastOut,
     ForecastPointOut,
 )
+from services import ratelimit
 from services.anomaly_explain import explain_anomalies
 from services.chat import answer_chat, stream_chat
 from services.forecast_store import get_forecast
@@ -51,6 +52,27 @@ def _history(request: ChatRequest) -> list[dict[str, str]]:
     happens in `services/agent.py`, so the limit is enforced once, server-side,
     however the request arrived."""
     return [turn.model_dump() for turn in request.history]
+
+
+def rate_limited(http: Request) -> None:
+    """Reject a caller over any chat limit (decision #43).
+
+    A dependency rather than middleware, so it guards exactly the two routes that
+    spend model quota and nothing else — the map and country pages are free to
+    serve, and rate-limiting them would be all cost and no protection.
+
+    `Retry-After` is real, not a constant: a caller told to come back in a second
+    when the answer is "tomorrow" will simply retry in a second.
+    """
+    decision = ratelimit.limiter().check(
+        ratelimit.client_key(dict(http.headers), http.client.host if http.client else None)
+    )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=decision.detail,
+            headers={"Retry-After": str(decision.retry_after)},
+        )
 
 
 @router.get("/forecast/{country_code}", response_model=ForecastOut)
@@ -152,7 +174,7 @@ async def get_anomaly_explanations(
     ]
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(rate_limited)])
 async def post_chat(
     request: ChatRequest, session: AsyncSession = Depends(get_session)
 ) -> ChatResponse:
@@ -165,7 +187,7 @@ async def post_chat(
     return ChatResponse(**result)
 
 
-@router.post("/chat/stream")
+@router.post("/chat/stream", dependencies=[Depends(rate_limited)])
 async def post_chat_stream(
     request: ChatRequest, session: AsyncSession = Depends(get_session)
 ) -> StreamingResponse:

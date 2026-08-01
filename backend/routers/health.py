@@ -11,6 +11,7 @@ from db import check_db, get_session
 from logging_config import get_logger
 from scheduler import scheduler_status
 from schemas import HealthOut, StatusOut
+from services import ratelimit, telemetry
 
 logger = get_logger(__name__)
 
@@ -60,4 +61,5 @@ async def status(session: AsyncSession = Depends(get_session)) -> StatusOut:
         observations_tracked=observations,
         anomalies_flagged=anomalies,
         sources=sources,
+        chat={**telemetry.counters().snapshot(), **ratelimit.limiter().snapshot()},
     )
