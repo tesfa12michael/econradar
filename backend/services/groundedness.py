@@ -22,10 +22,10 @@ too narrow a definition of grounded. Japan at 2.5% and Germany at 3.7%, both rea
 out of tool results, make "a gap of 1.2 percentage points" a fact — and the first
 version of this module retracted the whole answer over it, because 1.2 was not in
 the context. So a figure that is *not* in the evidence gets a second test: is it
-exact arithmetic on figures stated in the same sentence? A difference, a sum, a
-mean, a ratio or a percentage change, recomputed here and required to match. The
-operands must be in the sentence, which is the safety property — the model has
-shown its working, the reader can check it, and nothing can be derived from a
+exact arithmetic on figures quoted right beside it? A difference, a sum, a mean, a
+ratio or a percentage change, recomputed here and required to reproduce the digits
+as written. Locality is the safety property — the model has shown its working, the
+reader can check it without looking elsewhere, and nothing can be derived from a
 number that was itself invented. Arithmetic that is merely *asserted* still fails:
 "2.5% against 3.7% is a gap of 4.4 points" is rejected exactly as before.
 
@@ -41,8 +41,8 @@ vocabulary of computed ratios ("half", "double", "twice", "tenfold"), which are
 numeric claims however they are spelled. Plain counting words ("one", "two") are
 *not* flagged: they carry structural meaning in ordinary prose ("one of the
 largest") and treating them as claims would reject honest narration. A ratio word
-is cleared by the same rule as a derived figure: quote both numbers in the sentence
-and the multiple is checked rather than assumed.
+is cleared by the same rule as a derived figure: quote both numbers beside it and
+the multiple is checked rather than assumed.
 """
 
 from __future__ import annotations
@@ -114,11 +114,31 @@ _PERIOD_HALF_RE = re.compile(
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
-#: Beyond this many figures, a sentence is a list — a top-ten ranking, a table row —
-#: not a derivation, and every extra operand widens the set of values that would
+#: Beyond this many figures, the text is a list — a top-ten ranking, a table row —
+#: not a derivation, and every extra operand multiplies the set of values that would
 #: count as "derived". Capped so the second chance stays a second chance rather than
 #: becoming a way for any number to look reachable.
-MAX_DERIVATION_OPERANDS = 8
+MAX_DERIVATION_OPERANDS = 6
+
+#: Sentences a derivation may reach back over. One was too few, measured against a
+#: real answer: "South Africa's was 32.4% in 2025, while Japan's was 2.5%. The gap is
+#: 29.9 percentage points." is how the comparison actually gets written, and the
+#: subtraction is exactly right. Two is where it stops — a reader checking a figure
+#: looks at the line above it, not at the top of the answer.
+DERIVATION_WINDOW_SENTENCES = 2
+
+
+def _is_calendar_year(value: float) -> bool:
+    """Years are labels, not quantities.
+
+    Admitting them as operands means "2025 - 2.5" and "2025 / 2020" become candidate
+    derivations, which is a hundred meaningless values for every meaningful one — and
+    every one of them is another chance for an invented figure to land on something.
+    The cost is that a span of years written in digits ("over the 5 years to 2025")
+    is not derivable; that is a date range, and the prompt asks for the dates.
+    """
+    return float(value).is_integer() and 1800 <= value <= 2200
+
 
 # Rescalings a narrator may legitimately apply to a supplied value: writing
 # 3.4 trillion for 3_400_000_000_000. Grounding these can only ever match a real
@@ -279,21 +299,27 @@ def _reproduces(literal: str, value: float, candidates: set[float]) -> bool:
 def _derivable(text: str, allowed: set[float], tolerance: float) -> set[float]:
     """Ungrounded values that are exact arithmetic on grounded figures beside them.
 
-    Sentence by sentence, because the sentence is what makes this safe: the operands
-    have to be in front of the reader. Across a whole answer, "some two numbers
-    somewhere produce this" is close to no constraint at all.
+    Over a short sliding window rather than the whole answer, because locality is
+    what keeps this safe: the operands have to be in front of the reader. Across a
+    whole answer, "some two numbers somewhere produce this" is barely a constraint,
+    and each extra operand multiplies the candidate set.
     """
     rescued: set[float] = set()
-    for sentence in _SENTENCE_SPLIT_RE.split(text):
-        numbers = extract_numbers(sentence)
+    sentences = _SENTENCE_SPLIT_RE.split(text)
+    for index, sentence in enumerate(sentences):
         pending = [
             (literal, value)
-            for literal, value in numbers
+            for literal, value in extract_numbers(sentence)
             if not _matches(value, allowed, tolerance)
         ]
         if not pending:
             continue
-        operands = [value for _, value in numbers if _matches(value, allowed, tolerance)]
+        window = " ".join(sentences[max(0, index + 1 - DERIVATION_WINDOW_SENTENCES) : index + 1])
+        operands = [
+            value
+            for _, value in extract_numbers(window)
+            if _matches(value, allowed, tolerance) and not _is_calendar_year(value)
+        ]
         if not 2 <= len(operands) <= MAX_DERIVATION_OPERANDS:
             continue
         candidates = derivations(operands)

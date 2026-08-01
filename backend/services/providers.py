@@ -443,10 +443,40 @@ def _to_gemini_contents(turns: Sequence[AgentTurn]) -> list[dict[str, Any]]:
     Google models a function response as something the caller hands back, so it
     carries the `user` role even though no user wrote it. Getting this wrong makes
     the model re-issue the same call forever.
+
+    **A tool call made by another provider cannot be replayed as a `functionCall`.**
+    Gemini 3.x rejects any `functionCall` part without the opaque `thoughtSignature`
+    it would have issued itself, with HTTP 400 — and a call Mistral made has no such
+    signature and never will. That is exactly the handover this rotation exists to
+    perform: Mistral queries a country, hits its rate limit, and Gemini is asked to
+    finish. Seen in production on "What is Brazil's interest rate?", where the
+    handover failed and a completed database lookup was thrown away.
+
+    So an unsigned call is replayed as *prose* instead: what was asked, and what came
+    back, as a user turn. Gemini cannot re-issue a call it can see was already
+    answered, the evidence survives the handover intact, and — the part that matters
+    — the text is the same JSON payload the verifier will check the answer against,
+    so nothing is grounded by the reformatting.
     """
     contents: list[dict[str, Any]] = []
+    orphaned: set[str] = set()
     for turn in turns:
         if turn.role == "tool":
+            if turn.tool_call_id in orphaned:
+                contents.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    f"Result of the earlier {turn.tool_name} query, already "
+                                    f"run against the database:\n{turn.text or ''}"
+                                )
+                            }
+                        ],
+                    }
+                )
+                continue
             contents.append(
                 {
                     "role": "user",
@@ -466,10 +496,15 @@ def _to_gemini_contents(turns: Sequence[AgentTurn]) -> list[dict[str, Any]]:
         if turn.text:
             parts.append({"text": turn.text})
         for call in turn.tool_calls:
-            part: dict[str, Any] = {"functionCall": {"name": call.name, "args": call.arguments}}
-            if call.signature:
-                part["thoughtSignature"] = call.signature
-            parts.append(part)
+            if not call.signature:
+                orphaned.add(call.id)
+                continue
+            parts.append(
+                {
+                    "functionCall": {"name": call.name, "args": call.arguments},
+                    "thoughtSignature": call.signature,
+                }
+            )
         if not parts:
             continue
         contents.append({"role": "model" if turn.role == "assistant" else "user", "parts": parts})

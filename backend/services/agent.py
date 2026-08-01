@@ -369,6 +369,21 @@ async def run_agent(
         failure=final.get("failure"),
     )
 
+    # An answer with no tool call behind it came from the model's training data,
+    # whatever it says. Caught live: asked "What is Japan's GDP?", the agent skipped
+    # the tools entirely and listed five GDP variants from memory — PPP, constant
+    # local currency, current US dollars — of which this database holds exactly none.
+    # It scored 1.00, because prose with no digits in it cannot fail a numeric
+    # verifier. That is problem 4 taking the one route left open to it, and the only
+    # reliable check is structural: no query, no answer.
+    if answer.text and not answer.results:
+        logger.warning(
+            "agent: answer produced without querying the database — refusing: %r",
+            answer.text[:160],
+        )
+        answer.failure = "the answer was written without querying the database"
+        answer.text = ""
+
     # The guarantee, not the hint. A global superlative reached without ranking
     # every country is the Montenegro failure, whatever produced it — a model that
     # ignored the directive, or one that ranked nothing and answered from the tail

@@ -196,12 +196,21 @@ def _clamp(value: Any, default: int, ceiling: int) -> int:
 
 
 def _iso_date(raw: Any) -> dt.date | None:
+    """A date from an ISO string, a year-month, or a bare year.
+
+    A model asked about "the 1960s" writes `1960`, and rejecting that would silently
+    drop the window the question was actually about — the query would then answer for
+    the wrong period without anything saying so.
+    """
     if not raw:
         return None
-    try:
-        return dt.date.fromisoformat(str(raw)[:10])
-    except ValueError:
-        return None
+    token = str(raw).strip()[:10]
+    for text_form in (token, f"{token}-01", f"{token}-01-01"):
+        try:
+            return dt.date.fromisoformat(text_form)
+        except ValueError:
+            continue
+    return None
 
 
 async def _resolve_country(session: AsyncSession, token: str) -> tuple[str, str | None] | None:
@@ -349,15 +358,30 @@ async def run_query_observations(session: AsyncSession, args: dict[str, Any]) ->
         latest_only = latest_only.strip().lower() not in {"false", "0", "no"}
     limit = _clamp(args.get("limit"), default=24, ceiling=settings.agent_max_rows)
 
+    start, end = _iso_date(args.get("start_date")), _iso_date(args.get("end_date"))
+    # Dates and "latest only" contradict each other, and the old reading — ignore the
+    # dates — answered a different question from the one that was asked without
+    # anything saying so. Nobody supplies a window hoping it will be dropped.
+    if start is not None or end is not None:
+        latest_only = False
+
     clauses = ["country_code = :country", "indicator_code = :code"]
     params: dict[str, Any] = {"country": country_code, "code": meta.indicator_code}
-    if not latest_only:
-        if (start := _iso_date(args.get("start_date"))) is not None:
-            clauses.append("observation_date >= :start")
-            params["start"] = start
-        if (end := _iso_date(args.get("end_date"))) is not None:
-            clauses.append("observation_date <= :end")
-            params["end"] = end
+    if start is not None:
+        clauses.append("observation_date >= :start")
+        params["start"] = start
+    if end is not None:
+        clauses.append("observation_date <= :end")
+        params["end"] = end
+    # Carried into every payload below so the dates the question was about are part
+    # of the evidence. Without it an answer that correctly says "nothing for the
+    # 1960s" is retracted for quoting 1960, a number the tool was told and never
+    # reported back.
+    window = (
+        {"start_date": str(start) if start else None, "end_date": str(end) if end else None}
+        if (start or end)
+        else None
+    )
 
     view = "v_latest_observations" if latest_only else "v_observations"
     # limit + 1: the extra row is how truncation is *detected* rather than assumed,
@@ -428,10 +452,7 @@ async def run_query_observations(session: AsyncSession, args: dict[str, Any]) ->
                     "last_observation": str(coverage.last),
                 },
                 "observations": [],
-                "requested_window": {
-                    "start_date": str(_iso_date(args.get("start_date")) or ""),
-                    "end_date": str(_iso_date(args.get("end_date")) or ""),
-                },
+                "requested_window": window or {},
                 "no_data_in_requested_window": (
                     f"This series holds {coverage.n} observations for "
                     f"{country_name or country_code}, from {coverage.first} to "
@@ -492,6 +513,7 @@ async def run_query_observations(session: AsyncSession, args: dict[str, Any]) ->
                 "last_observation": str(coverage.last),
             },
             "truncated": truncated,
+            **({"requested_window": window} if window else {}),
             "observations": [
                 {
                     "date": str(r.observation_date),

@@ -182,6 +182,46 @@ def test_arithmetic_that_is_simply_wrong_is_still_caught():
     assert "20.1" in report.ungrounded
 
 
+def test_a_derivation_may_reach_back_one_sentence():
+    """How the comparison actually gets written, taken verbatim from a live answer:
+
+        "South Africa's unemployment rate was 32.4% in 2025, while Japan's was 2.5%
+         in the same year. The gap is 29.9 percentage points."
+
+    Both operands are one sentence back. A one-sentence rule rejected the whole
+    answer over arithmetic that is exactly right, which is the over-strictness this
+    is meant to remove rather than relocate.
+    """
+    report = verify(
+        "Inflation was 33.2% in 2024, against 18.85% in 2022. The gap is 14.35 points.",
+        CONTEXT,
+    )
+    assert report.passed
+    assert report.extra["derived"] == [pytest.approx(14.35)]
+
+
+def test_a_derivation_cannot_reach_back_two_sentences():
+    """The window has to stop somewhere. A reader checking a figure looks at the line
+    above it, not at the top of the answer."""
+    report = verify(
+        "Inflation was 33.2% in 2024. It was 18.85% two years earlier. "
+        "Nigeria is one of the economies tracked here. The gap is 14.35 points.",
+        CONTEXT,
+    )
+    assert not report.passed
+    assert "14.35" in report.ungrounded
+
+
+def test_years_are_not_operands():
+    """2024 - 33.2 is not a derivation anyone means, and admitting years multiplies
+    the candidate set with meaningless values — every one another chance for an
+    invented figure to land on something."""
+    # 2024 / 33.2 = 60.96, which the year-as-operand version accepted.
+    report = verify("Inflation was 33.2% in 2024, giving a figure of 60.96.", CONTEXT)
+    assert not report.passed
+    assert "60.96" in report.ungrounded
+
+
 def test_a_derivation_must_show_its_operands():
     """The operands have to be in the same sentence. "The average was 28.93%" may be
     true arithmetic on two figures elsewhere in the answer, but a reader cannot see

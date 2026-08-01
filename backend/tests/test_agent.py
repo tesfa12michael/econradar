@@ -656,6 +656,81 @@ async def test_an_ambiguous_indicator_returns_the_choices_not_a_guess(monkeypatc
     assert "GDP growth (annual %)" in result.reader_message
 
 
+async def test_an_answer_with_no_query_behind_it_is_refused(monkeypatch, one_provider):
+    """Problem 4 taking the last route open to it.
+
+    Live, asked "What is Japan's GDP?", the agent skipped the tools and listed five
+    GDP variants from memory — PPP, constant local currency, current US dollars — of
+    which this database holds none. It scored 1.00, because prose with no digits in
+    it cannot fail a numeric verifier. Nothing but a structural check catches that:
+    no query, no answer.
+    """
+    provider = _ScriptedProvider(_completion(text="GDP could mean several things: PPP, nominal…"))
+    monkeypatch.setattr(agent_module.providers, "complete_with_tools", provider)
+
+    answers = [
+        item
+        async for kind, item in agent_module.run_agent(None, "What is Japan's GDP?", [])
+        if kind == "answer"
+    ]
+    assert answers[0].text == ""
+    assert "without querying the database" in answers[0].failure
+
+
+def test_a_window_supplied_alongside_latest_only_is_honoured():
+    """`latest_only` defaults to true, so a model that supplies dates and leaves it
+    alone was answering a different question from the one it asked — silently."""
+    from services import agent_tools as tools_module
+
+    assert tools_module._iso_date("1960") == __import__("datetime").date(1960, 1, 1)
+    assert tools_module._iso_date("1960-05") == __import__("datetime").date(1960, 5, 1)
+    assert tools_module._iso_date("not a date") is None
+
+
+def test_a_tool_call_from_another_provider_is_replayed_as_prose_for_gemini():
+    """The handover this rotation exists to perform, which HTTP 400'd in production.
+
+    Gemini 3.x rejects a `functionCall` part with no `thoughtSignature`, and a call
+    Mistral made has none and never will. Replaying it as text keeps the evidence —
+    byte-identical to what the verifier will check — instead of discarding a lookup
+    that already ran.
+    """
+    from services.providers import _to_gemini_contents
+
+    turns = [
+        AgentTurn(role="user", text="What is Brazil's interest rate?"),
+        AgentTurn(
+            role="assistant",
+            tool_calls=(ToolCall(id="c1", name=QUERY_OBSERVATIONS, arguments={"country": "BRA"}),),
+        ),
+        AgentTurn(
+            role="tool", text='{"value": 15.0}', tool_call_id="c1", tool_name=QUERY_OBSERVATIONS
+        ),
+    ]
+    contents = _to_gemini_contents(turns)
+
+    parts = [part for content in contents for part in content["parts"]]
+    assert all("functionCall" not in p for p in parts), "an unsigned call cannot be replayed as one"
+    assert all("functionResponse" not in p for p in parts), "and neither can its response"
+    # But the evidence itself survives, byte-identical to what the verifier checks.
+    assert any('{"value": 15.0}' in p.get("text", "") for p in parts)
+
+
+def test_a_signed_tool_call_still_goes_back_as_a_function_call():
+    from services.providers import _to_gemini_contents
+
+    turns = [
+        AgentTurn(
+            role="assistant",
+            tool_calls=(ToolCall(id="c1", name=RANK_COUNTRIES, arguments={}, signature="sig-abc"),),
+        ),
+        AgentTurn(role="tool", text="{}", tool_call_id="c1", tool_name=RANK_COUNTRIES),
+    ]
+    contents = _to_gemini_contents(turns)
+    assert contents[0]["parts"][0]["thoughtSignature"] == "sig-abc"
+    assert contents[1]["parts"][0]["functionResponse"]["name"] == RANK_COUNTRIES
+
+
 def test_citations_come_from_tool_results_not_similarity():
     citations = chat_module.citations_for([_observation_result()])
     assert len(citations) == 1
