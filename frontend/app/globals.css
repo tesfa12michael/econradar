@@ -1,34 +1,291 @@
 @import 'tailwindcss';
 
-/* EconRadar design tokens (docs/designsystem.md). Dark-first; light is Phase 4. */
+/* ── EconRadar design tokens ───────────────────────────────────────────────
+ *
+ * The palette is docs/designsystem.md's, unchanged in its values. What is new
+ * here is *depth*: that document specifies three surfaces and one border, which
+ * is enough for flat cards and not enough for an interface that layers. So the
+ * ramp gains an intermediate plane, a translucent plane for the few surfaces
+ * that genuinely float, and a lit top edge — the thing that actually reads as
+ * elevation on a dark background, where a drop shadow reads as nothing.
+ *
+ * The brand cyan is named `--signal` rather than `--accent`. shadcn/ui reserves
+ * `--accent` for its hover surface, and pointing that at electric cyan would
+ * turn every hover state in the library into a flare. `--accent` is left to
+ * shadcn; `--signal` means live, selected, or interactive, and nothing else.
+ */
+
 :root {
-  --bg-app: #0a0f1e;
-  --bg-card: #111827;
-  --bg-elevated: #1a2235;
-  --border: #1f2d45;
-  --text-primary: #f0f4ff;
-  --text-secondary: #8b9ec7;
-  --text-tertiary: #4a5a7a;
-  --accent: #00d4ff;
+  /* Surfaces, deepest to nearest. plane-0 is docs/designsystem.md's --bg-app. */
+  --plane-0: #0a0f1e;
+  --plane-1: #0e1424;
+  --plane-2: #111827;
+  --plane-3: #1a2235;
+  --plane-glass: rgb(17 24 39 / 0.72);
+  --plane-scrim: rgb(7 11 22 / 0.86);
+
+  /* Lines. `hairline` divides content; `edge` bounds a surface; `edge-lit` is
+   * the 1px highlight along a surface's top, which is what carries elevation. */
+  --hairline: #18243a;
+  --edge: #1f2d45;
+  --edge-strong: #2b3b58;
+  --edge-lit: rgb(240 244 255 / 0.06);
+
+  /* Ink */
+  --ink: #f0f4ff;
+  --ink-muted: #8b9ec7;
+  --ink-faint: #4a5a7a;
+
+  /* The one accent. Live, selected, interactive. Never decorative. */
+  --signal: #00d4ff;
+  --signal-dim: #0891ad;
+  --signal-wash: rgb(0 212 255 / 0.1);
+  --signal-ink: #04121b;
+
+  /* Semantic status. Amber is reserved for a flagged observation and is the
+   * only colour permitted to glow, because a glow here means "look at this". */
+  --alert: #f59e0b;
+  --alert-soft: #fb923c;
   --positive: #34d399;
   --negative: #f87171;
-  --warn: #f59e0b;
+  --attribution: #3b5998;
 
-  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+  /* Radius. Nothing above 14px on a surface: over-rounding reads as a toy. */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius: var(--radius-md);
+
+  /* Motion. Exponential ease-out only — no bounce, no elastic. */
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --dur-4: 560ms;
+  --dur-5: 900ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-soft: cubic-bezier(0.165, 0.84, 0.44, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* Layers. Semantic, never arbitrary. */
+  --z-base: 0;
+  --z-raised: 10;
+  --z-sticky: 20;
+  --z-backdrop: 30;
+  --z-overlay: 40;
+  --z-toast: 50;
+  --z-tooltip: 60;
+
+  /* Type */
+  --font-sans: var(--font-geist), system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: var(--font-jetbrains), ui-monospace, 'SFMono-Regular', 'Menlo', monospace;
+
+  /* ── shadcn/ui semantic aliases ─────────────────────────────────────────
+   * shadcn components read these names. Mapping them onto the tokens above is
+   * what lets the library render in EconRadar's palette instead of importing a
+   * second, competing one (see architecture.md decision #46). */
+  --background: var(--plane-0);
+  --foreground: var(--ink);
+  --card: var(--plane-2);
+  --card-foreground: var(--ink);
+  --popover: var(--plane-3);
+  --popover-foreground: var(--ink);
+  --primary: var(--signal);
+  --primary-foreground: var(--signal-ink);
+  --secondary: var(--plane-3);
+  --secondary-foreground: var(--ink);
+  --muted: var(--plane-1);
+  --muted-foreground: var(--ink-muted);
+  --accent: var(--plane-3);
+  --accent-foreground: var(--ink);
+  --destructive: var(--negative);
+  --destructive-foreground: var(--plane-0);
+  --border: var(--edge);
+  --input: var(--edge);
+  --ring: var(--signal);
+}
+
+@theme inline {
+  --color-plane-0: var(--plane-0);
+  --color-plane-1: var(--plane-1);
+  --color-plane-2: var(--plane-2);
+  --color-plane-3: var(--plane-3);
+  --color-hairline: var(--hairline);
+  --color-edge: var(--edge);
+  --color-edge-strong: var(--edge-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-signal: var(--signal);
+  --color-signal-dim: var(--signal-dim);
+  --color-signal-ink: var(--signal-ink);
+  --color-alert: var(--alert);
+  --color-alert-soft: var(--alert-soft);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+  --color-attribution: var(--attribution);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+}
+
+html {
+  color-scheme: dark;
 }
 
 html,
 body {
-  background: var(--bg-app);
-  color: var(--text-primary);
+  background: var(--plane-0);
+  color: var(--ink);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-@media (prefers-reduced-motion: reduce) {
+/* Figures are read in columns and compared against each other, so they are set
+ * in tabular figures everywhere — a proportional 1 makes a column of numbers
+ * shift under its own heading. */
+.tabular,
+[data-numeric] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+::selection {
+  background: var(--signal);
+  color: var(--signal-ink);
+}
+
+/* One focus treatment for the whole product. */
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Firefox keeps a default ring under the custom one. */
+::-moz-focus-inner {
+  border: 0;
+}
+
+@supports (scrollbar-width: thin) {
   * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--edge-strong) transparent;
+  }
+}
+
+/* ── Ambient keyframes ──────────────────────────────────────────────────────
+ * Transform and opacity only. Every one of these is suppressed under reduced
+ * motion by the block at the bottom of this file. */
+
+@keyframes drift-a {
+  0%,
+  100% {
+    transform: translate3d(-4%, -2%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(5%, 3%, 0) scale(1.12);
+  }
+}
+
+@keyframes drift-b {
+  0%,
+  100% {
+    transform: translate3d(3%, 4%, 0) scale(1.08);
+  }
+  50% {
+    transform: translate3d(-5%, -3%, 0) scale(1);
+  }
+}
+
+/* A flagged observation pulses. Nothing else in the product does. */
+@keyframes alert-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.12;
+    transform: scale(2.1);
+  }
+}
+
+@keyframes tape-scroll {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+@keyframes sheen {
+  from {
+    transform: translate3d(-120%, 0, 0);
+  }
+  to {
+    transform: translate3d(320%, 0, 0);
+  }
+}
+
+/* Skeletons breathe rather than blink. */
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* ── Reduced motion ─────────────────────────────────────────────────────────
+ * Ambient animation stops outright; the few transitions that communicate state
+ * are collapsed rather than removed, so a state change is still legible.
+ * Components that animate through Motion read the same preference in JS and
+ * render their end state directly, so nothing depends on this block alone. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
