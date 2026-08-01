@@ -165,6 +165,11 @@ export const MODEL_LABELS: Record<string, string> = {
 
 export const PROVIDER_LABELS: Record<string, string> = {
   mistral: 'Mistral',
+  // The agent runs a different Mistral model from narration, so the backend
+  // registers it as its own provider (decision #39). Both read as "Mistral" here —
+  // which model answered is a backend concern, not a chip.
+  mistral_agent: 'Mistral',
+  nvidia_nim: 'NVIDIA NIM',
   groq: 'Groq',
   openrouter: 'OpenRouter',
   gemini_flash: 'Gemini Flash',
