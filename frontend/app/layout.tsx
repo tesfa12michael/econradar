@@ -54,6 +54,14 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${jetbrains.variable}`}>
       <body className="min-h-dvh antialiased">
+        {/* Motion writes a reveal's starting `opacity: 0` into the server HTML,
+            so without this the rankings rail and the flagged feed render
+            invisible for anyone with JavaScript off. The indicator tabs on the
+            profile page are server-rendered links precisely so the product
+            works without JavaScript; an animation must not quietly undo that. */}
+        <noscript>
+          <style>{`[data-reveal]{opacity:1!important;transform:none!important}`}</style>
+        </noscript>
         <a
           href="#main"
           className="sr-only rounded-md bg-signal px-4 py-2 font-medium text-signal-ink focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60]"

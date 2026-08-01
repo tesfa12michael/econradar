@@ -141,6 +141,180 @@ export interface AnomalyExplanation {
   cached: boolean;
 }
 
+/* ── Measurement metadata and rankings (features 2.8) ─────────────────────── */
+
+/** What an indicator actually measures. Seven typed axes plus a written note,
+ * populated from each provider's own metadata rather than inferred. This is the
+ * layer that distinguishes the three unemployment series and the two debt
+ * series from each other — mixing them produces a wrong answer that reads as
+ * perfectly plausible. */
+export interface IndicatorMetadata {
+  indicator_code: string;
+  indicator_name: string;
+  source: string;
+  unit: string | null;
+  frequency: string | null;
+  category: string | null;
+  concept: string | null;
+  metric_type: string | null;
+  transformation: string | null;
+  observation_basis: string | null;
+  price_basis: string | null;
+  coverage_definition: string | null;
+  seasonal_adjustment: string | null;
+  /** Exactly one series per concept carries this — a partial unique index, not
+   * a convention, because two primaries would make "which country has the
+   * highest X" answerable two different ways. */
+  is_primary_for_concept: boolean;
+  comparability_notes: string | null;
+  country_count: number | null;
+  observation_count: number | null;
+  earliest_date: string | null;
+  latest_date: string | null;
+}
+
+export interface RankingEntry {
+  rank: number;
+  country_code: string;
+  country_name: string | null;
+  region: string | null;
+  value: number;
+  observation_date: string | null;
+  source: string | null;
+}
+
+/** A ranking always reads every country. `limit` trims the response after the
+ * ranking is computed and counted, so `country_count` keeps reporting the whole
+ * field and `truncated` says outright that it was cut. */
+export interface Ranking {
+  indicator: IndicatorMetadata;
+  order: 'asc' | 'desc';
+  country_count: number;
+  truncated: boolean;
+  earliest_observation: string | null;
+  latest_observation: string | null;
+  entries: RankingEntry[];
+}
+
+const CONCEPT_LABELS: Record<string, string> = {
+  gdp_growth: 'GDP growth',
+  gdp_per_capita: 'GDP per capita',
+  current_account: 'Current account',
+  government_debt: 'Government debt',
+  exports: 'Exports',
+  imports: 'Imports',
+  inflation: 'Inflation',
+  unemployment: 'Unemployment',
+  exchange_rate: 'Exchange rate',
+  industrial_production: 'Industrial production',
+  equity_market: 'Equity market',
+  policy_rate: 'Policy rate',
+  bond_yield: 'Bond yield',
+  price_level: 'Price level',
+};
+
+export function conceptLabel(concept: string | null | undefined): string {
+  if (!concept) return 'Other';
+  return CONCEPT_LABELS[concept] ?? concept.replace(/_/g, ' ');
+}
+
+/** Vocabulary values worth telling a reader about, in reading order.
+ *
+ * `not_applicable` and `none` are omitted rather than rendered: "seasonal
+ * adjustment: not applicable" is noise on an annual series, and a basis line
+ * that is half disclaimers stops being read at all. */
+const BASIS_WORDS: Record<string, string> = {
+  real: 'real',
+  nominal: 'nominal',
+  year_over_year: 'year-over-year',
+  period_average: 'period average',
+  period_total: 'period total',
+  end_of_period: 'end of period',
+  general_government: 'general government',
+  central_government: 'central government',
+  ilo_modelled: 'ILO-modelled',
+  national_definition: 'national definition',
+  oecd_harmonised: 'OECD-harmonised',
+  seasonally_adjusted: 'seasonally adjusted',
+  not_seasonally_adjusted: 'not seasonally adjusted',
+};
+
+/** The one-line answer to "what am I looking at?" */
+export function basisSummary(meta: Partial<IndicatorMetadata>): string[] {
+  return [
+    meta.price_basis,
+    meta.transformation,
+    meta.observation_basis,
+    meta.coverage_definition,
+    meta.seasonal_adjustment,
+  ]
+    .map((value) => (value ? BASIS_WORDS[value] : undefined))
+    .filter((value): value is string => Boolean(value));
+}
+
+/** Year from an ISO date, for coverage ranges. */
+export function yearOf(date: string | null | undefined): string {
+  return date ? date.slice(0, 4) : '—';
+}
+
+/** An absolute UTC timestamp, formatted identically on the server and in the
+ * browser.
+ *
+ * Deliberately not "2 hours ago". These pages are statically revalidated, so a
+ * relative time is computed at build and then drifts silently for as long as
+ * the cache lives — and it would differ between the server render and the
+ * client's clock, which is a hydration mismatch on every page load. An absolute
+ * time in UTC is one fact that stays true. */
+export function formatUtc(iso: string | null | undefined): string {
+  if (!iso) return 'never';
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return 'unknown';
+  const day = at.getUTCDate();
+  const month = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ][at.getUTCMonth()];
+  const hh = String(at.getUTCHours()).padStart(2, '0');
+  const mm = String(at.getUTCMinutes()).padStart(2, '0');
+  return `${day} ${month} ${hh}:${mm}z`;
+}
+
+export interface SourceHealth {
+  name: string;
+  is_active: boolean;
+  last_successful_run: string | null;
+}
+
+/** The public status payload. Sanitised aggregates only — no question text and
+ * no client addresses (decision #45). */
+export interface SystemStatus {
+  status: string;
+  environment: string;
+  countries_tracked: number;
+  indicators_tracked: number;
+  observations_tracked: number;
+  anomalies_flagged: number;
+  sources: SourceHealth[];
+  groundedness_verification: string;
+  chat: {
+    requests: number;
+    outcomes: Record<string, number>;
+    providers: Record<string, number>;
+    cache_hit_rate: number | null;
+    fallback_rate: number | null;
+    ranking_rate: number | null;
+    refusal_rate: number | null;
+    timeout_rate: number | null;
+    mean_seconds: number | null;
+    tool_calls: number;
+    tool_failures: number;
+    tracked_clients: number;
+    chat_requests_today: number;
+    daily_budget: number;
+    daily_remaining: number;
+  } | null;
+}
+
 export interface Citation {
   index: number;
   country_code: string | null;

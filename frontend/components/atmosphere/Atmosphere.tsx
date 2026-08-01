@@ -45,19 +45,27 @@ export function Atmosphere() {
         style={{ x: bloomX, y: bloomY, willChange: live ? 'transform' : undefined }}
       >
         <div
-          className="absolute left-[8%] top-[-18%] h-[78vh] w-[78vh] rounded-full blur-[120px]"
+          className="absolute left-[6%] top-[-22%] h-[86vh] w-[86vh] rounded-full blur-[110px]"
           style={{
             background:
-              'radial-gradient(circle, rgb(0 212 255 / 0.13) 0%, rgb(0 212 255 / 0.04) 45%, transparent 70%)',
+              'radial-gradient(circle, rgb(0 150 200 / 0.24) 0%, rgb(0 120 175 / 0.09) 46%, transparent 70%)',
             animation: reduced ? undefined : 'drift-a 46s ease-in-out infinite',
           }}
         />
         <div
-          className="absolute right-[2%] top-[24%] h-[92vh] w-[92vh] rounded-full blur-[140px]"
+          className="absolute right-[-4%] top-[18%] h-[100vh] w-[100vh] rounded-full blur-[130px]"
           style={{
             background:
-              'radial-gradient(circle, rgb(59 89 152 / 0.20) 0%, rgb(30 64 128 / 0.07) 48%, transparent 72%)',
+              'radial-gradient(circle, rgb(52 78 140 / 0.34) 0%, rgb(30 64 128 / 0.13) 48%, transparent 72%)',
             animation: reduced ? undefined : 'drift-b 62s ease-in-out infinite',
+          }}
+        />
+        <div
+          className="absolute bottom-[-30%] left-[28%] h-[70vh] w-[70vh] rounded-full blur-[130px]"
+          style={{
+            background:
+              'radial-gradient(circle, rgb(24 60 110 / 0.30) 0%, transparent 68%)',
+            animation: reduced ? undefined : 'drift-a 74s ease-in-out infinite reverse',
           }}
         />
       </motion.div>
@@ -69,11 +77,14 @@ export function Atmosphere() {
         <Graticule />
       </motion.div>
 
+      {/* Enough to keep the corners quiet and content legible over the blooms,
+          and no more: a heavier vignette flattens the layers underneath it back
+          into the single dead surface they exist to replace. */}
       <div
         className="absolute inset-0"
         style={{
           background:
-            'radial-gradient(120% 90% at 50% 12%, transparent 30%, rgb(10 15 30 / 0.55) 78%, rgb(10 15 30 / 0.9) 100%)',
+            'radial-gradient(135% 105% at 50% 4%, transparent 46%, rgb(10 15 30 / 0.3) 82%, rgb(10 15 30 / 0.62) 100%)',
         }}
       />
     </div>
@@ -99,9 +110,9 @@ function Graticule() {
       <defs>
         {/* The arcs fade out toward the lower right so they never run under the
             densest content on any page. */}
-        <radialGradient id="graticule-falloff" cx="21%" cy="10%" r="88%">
-          <stop offset="0%" stopColor="#8b9ec7" stopOpacity="0.30" />
-          <stop offset="55%" stopColor="#8b9ec7" stopOpacity="0.10" />
+        <radialGradient id="graticule-falloff" cx="21%" cy="10%" r="92%">
+          <stop offset="0%" stopColor="#8b9ec7" stopOpacity="0.62" />
+          <stop offset="50%" stopColor="#8b9ec7" stopOpacity="0.26" />
           <stop offset="100%" stopColor="#8b9ec7" stopOpacity="0" />
         </radialGradient>
         <mask id="graticule-mask">
@@ -110,19 +121,12 @@ function Graticule() {
       </defs>
 
       <g mask="url(#graticule-mask)" stroke="#8b9ec7" strokeWidth="1" vectorEffect="non-scaling-stroke">
-        <circle cx={cx} cy={cy} r={r} opacity="0.5" />
+        <circle cx={cx} cy={cy} r={r} opacity="0.7" />
         {meridians.map((rx, i) => (
-          <ellipse key={`m${i}`} cx={cx} cy={cy} rx={rx * r} ry={r} opacity="0.34" />
+          <ellipse key={`m${i}`} cx={cx} cy={cy} rx={rx * r} ry={r} opacity="0.5" />
         ))}
         {parallels.map(({ y, rx, ry }, i) => (
-          <ellipse
-            key={`p${i}`}
-            cx={cx}
-            cy={cy + y * r}
-            rx={rx * r}
-            ry={ry * r}
-            opacity="0.34"
-          />
+          <ellipse key={`p${i}`} cx={cx} cy={cy + y * r} rx={rx * r} ry={ry * r} opacity="0.5" />
         ))}
       </g>
     </svg>

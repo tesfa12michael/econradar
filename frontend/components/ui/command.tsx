@@ -69,13 +69,17 @@ function CommandInput({
   return (
     <div
       data-slot="command-input-wrapper"
-      className="flex h-9 items-center gap-2 border-b px-3"
+      // The focus ring lives on this row rather than on the input, so the
+      // header reads as one control. A bright outline drawn around the bare
+      // input, which is what has focus the moment the popover opens, looks
+      // bolted on to the panel around it.
+      className="flex h-11 items-center gap-2.5 border-b border-[color:var(--hairline)] px-3 transition-colors duration-200 has-[input:focus-visible]:border-[color:var(--signal)]"
     >
-      <SearchIcon className="size-4 shrink-0 opacity-50" />
+      <SearchIcon className="size-4 shrink-0 text-ink-dim" />
       <CommandPrimitive.Input
         data-slot="command-input"
         className={cn(
-          "flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-hidden placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50",
           className
         )}
         {...props}

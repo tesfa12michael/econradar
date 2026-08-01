@@ -2,19 +2,25 @@
 
 /** Scroll reveals, with the failure mode designed out.
  *
- * A reveal that gates visibility on a class or a transition ships blank when
- * the transition never fires — on a background tab, in a headless renderer, in
- * a screenshot. These start from an already-laid-out element and animate
- * `opacity` and `y` off it, and under reduced motion they render their end
- * state immediately, so content is never *conditional* on motion running.
+ * A reveal starts its element at `opacity: 0`, and Motion writes that into the
+ * server-rendered markup — so the naive version ships a page whose rankings and
+ * feed are *invisible* to anyone without JavaScript, and to any renderer that
+ * never runs a frame. This project already server-renders its indicator tabs so
+ * they work without JavaScript; a decorative animation quietly undoing that is
+ * a worse bug than having no animation at all.
+ *
+ * Every element here therefore carries `data-reveal`, and `globals.css` forces
+ * that attribute back to its resting state in two situations the animation
+ * cannot be relied on to reach: inside `<noscript>`, and under reduced motion.
+ * The animation is an enhancement over a page that is already complete.
  *
  * `once: true` throughout: content that re-animates every time it scrolls back
- * into view is content the reader has to wait for twice.
+ * into view is content the reader waits for twice.
  */
 
 import { motion, useReducedMotion, type HTMLMotionProps } from 'motion/react';
 
-import { IN_VIEW, riseVariants, staggerVariants } from '@/lib/motion';
+import { DURATION, IN_VIEW, riseVariants, staggerVariants } from '@/lib/motion';
 
 type RevealProps = HTMLMotionProps<'div'> & {
   /** Travel distance in pixels. 0 gives a plain crossfade. */
@@ -26,6 +32,7 @@ export function Reveal({ distance = 14, delay = 0, children, ...rest }: RevealPr
   const reduced = useReducedMotion() ?? false;
   return (
     <motion.div
+      data-reveal
       initial="hidden"
       whileInView="shown"
       viewport={IN_VIEW}
@@ -49,6 +56,7 @@ export function RevealGroup({
   const reduced = useReducedMotion() ?? false;
   return (
     <motion.div
+      data-reveal
       initial="hidden"
       whileInView="shown"
       viewport={IN_VIEW}
@@ -60,10 +68,10 @@ export function RevealGroup({
   );
 }
 
-export function RevealItem({ distance = 10, children, ...rest }: RevealProps) {
+export function RevealItem({ distance = 8, children, ...rest }: RevealProps) {
   const reduced = useReducedMotion() ?? false;
   return (
-    <motion.div variants={riseVariants(reduced, distance)} {...rest}>
+    <motion.div data-reveal variants={riseVariants(reduced, distance, DURATION.base)} {...rest}>
       {children}
     </motion.div>
   );

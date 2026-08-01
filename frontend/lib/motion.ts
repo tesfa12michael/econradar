@@ -32,17 +32,36 @@ export const transition = {
  * the highlight never lags visibly behind the cursor. */
 export const POINTER_SPRING = { stiffness: 140, damping: 22, mass: 0.6 } as const;
 
-/** A panel arriving: it rises a little and resolves. Reduced motion collapses
- * this to a plain crossfade rather than removing the state change entirely. */
-export function riseVariants(reduced: boolean, distance = 14): Variants {
+/** A panel arriving: it rises a little and settles.
+ *
+ * **Transform only. Nothing here animates opacity, and that is a correctness
+ * rule rather than a stylistic one.** A reveal that starts at `opacity: 0` has
+ * Motion write that into the server-rendered HTML, and it was measured doing
+ * exactly what the failure mode predicts: with the tab hidden, `requestAnimation
+ * Frame` stops, the animation freezes at zero, and the rankings rail and the
+ * flagged feed are *invisible* — and the same markup is what a reader with
+ * JavaScript off receives. Content must never be conditional on an animation
+ * having run. Animating only `y` makes that structurally impossible: the worst
+ * case is a section sitting eight pixels low.
+ *
+ * The arrival still reads, because what carries it is the stagger and the
+ * exponential ease, not the fade.
+ *
+ * `duration` is a parameter because a section and a table row are not the same
+ * event. A row inside a staggered list already waits its turn, so giving it the
+ * slow curve on top of that delay means the last of nine lands almost a second
+ * after the first and the list reads as loading rather than arriving.
+ */
+export function riseVariants(
+  reduced: boolean,
+  distance = 14,
+  duration: number = DURATION.slow,
+): Variants {
   return {
-    hidden: { opacity: 0, y: reduced ? 0 : distance },
+    hidden: { y: reduced ? 0 : distance },
     shown: {
-      opacity: 1,
       y: 0,
-      transition: reduced
-        ? { duration: DURATION.instant }
-        : { duration: DURATION.slow, ease: EASE_OUT },
+      transition: reduced ? { duration: 0 } : { duration, ease: EASE_OUT },
     },
   };
 }

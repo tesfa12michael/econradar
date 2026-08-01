@@ -50,10 +50,16 @@ export function Panel({
   );
 }
 
-/** A section heading with room for its own metadata on the right.
+/** A section heading and the line that qualifies it.
  *
- * No eyebrow above it. The position of a section on the page already says what
- * kind of thing it is; a small tracked label repeating that is scaffolding.
+ * The qualifier sits directly beneath the title rather than opposite it. Pushed
+ * to the far edge of the column it reads as an unrelated fragment, and it is
+ * doing the opposite job — "214 countries, latest reading each" is what stops
+ * "Ranked worldwide" being a claim the page cannot support.
+ *
+ * No eyebrow above either of them. Where a section sits on the page already
+ * says what kind of thing it is; a small tracked label repeating that is
+ * scaffolding.
  */
 export function SectionHead({
   title,
@@ -67,9 +73,9 @@ export function SectionHead({
   className?: string;
 }) {
   return (
-    <div className={cn('flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1', className)}>
+    <div className={className}>
       <Tag className="text-[15px] font-medium tracking-tight text-ink">{title}</Tag>
-      {meta ? <div className="text-[11px] text-ink-faint">{meta}</div> : null}
+      {meta ? <div className="mt-1 text-[12px] text-ink-dim">{meta}</div> : null}
     </div>
   );
 }
@@ -119,12 +125,17 @@ export function Figure({
   );
 }
 
-/** The mono marginalia line: coverage counts, dates, codes, basis notes. */
+/** The mono marginalia line: coverage counts, dates, codes, basis notes.
+ *
+ * 12px, which is `docs/designsystem.md`'s `text-xs` and its floor for
+ * attribution and footnotes. This carries real content — how many countries a
+ * series covers, which years it spans, what basis it is measured on — so it is
+ * held at the smallest size the design system permits for text, not below it. */
 export function Meta({ className, children, ...rest }: React.ComponentProps<'span'>) {
   return (
     <span
       data-numeric
-      className={cn('text-[11px] leading-relaxed text-ink-faint', className)}
+      className={cn('text-[12px] leading-relaxed text-ink-dim', className)}
       {...rest}
     >
       {children}
@@ -245,7 +256,7 @@ export function Empty({
   return (
     <div className={cn('flex flex-col items-start gap-1.5 py-8', className)}>
       <p className="text-sm font-medium text-ink-muted">{title}</p>
-      {hint && <p className="max-w-[52ch] text-[13px] leading-relaxed text-ink-faint">{hint}</p>}
+      {hint && <p className="max-w-[52ch] text-[13px] leading-relaxed text-ink-dim">{hint}</p>}
     </div>
   );
 }

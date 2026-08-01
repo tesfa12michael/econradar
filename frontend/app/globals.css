@@ -31,10 +31,21 @@
   --edge-strong: #2b3b58;
   --edge-lit: rgb(240 244 255 / 0.06);
 
-  /* Ink */
-  --ink: #f0f4ff;
-  --ink-muted: #8b9ec7;
-  --ink-faint: #4a5a7a;
+  /* Ink. Three readable steps, then one that is not meant to be read.
+   *
+   * `docs/designsystem.md` names three text colours and assigns the third,
+   * #4A5A7A, to "placeholder text, disabled states" — but the layout that
+   * follows needs a third *readable* weight for the mono marginalia carrying
+   * provenance and coverage, and #4A5A7A is 2.6:1 on the card surface. Used for
+   * content it would fail WCAG AA everywhere it appears.
+   *
+   * So `--ink-dim` is added between muted and faint, at 4.9:1 or better against
+   * every surface in the ramp, and `--ink-faint` goes back to meaning exactly
+   * what the document says it means. */
+  --ink: #f0f4ff; /* 14.6:1 on --plane-0 */
+  --ink-muted: #8b9ec7; /* 7.1:1 */
+  --ink-dim: #7c90b8; /* 6.0:1 on --plane-0, 4.9:1 on --plane-3 */
+  --ink-faint: #4a5a7a; /* placeholders and disabled only — never content */
 
   /* The one accent. Live, selected, interactive. Never decorative. */
   --signal: #00d4ff;
@@ -114,6 +125,7 @@
   --color-edge-strong: var(--edge-strong);
   --color-ink: var(--ink);
   --color-ink-muted: var(--ink-muted);
+  --color-ink-dim: var(--ink-dim);
   --color-ink-faint: var(--ink-faint);
   --color-signal: var(--signal);
   --color-signal-dim: var(--signal-dim);
@@ -274,6 +286,38 @@ p {
   }
 }
 
+/* ── The live tape ──────────────────────────────────────────────────────────
+ * A ribbon of current figures under the topbar. It pauses when the pointer is
+ * over it or focus lands inside, because a link that is moving is a link you
+ * cannot click. Under reduced motion the track stops and the strip becomes an
+ * ordinary horizontally scrollable row, so nothing on it becomes unreachable —
+ * a frozen marquee would simply hide half its contents. */
+
+.tape__track {
+  animation: tape-scroll 78s linear infinite;
+  will-change: transform;
+}
+
+.tape:hover .tape__track,
+.tape:focus-within .tape__track {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tape {
+    overflow-x: auto;
+  }
+
+  .tape__track {
+    animation: none;
+    will-change: auto;
+  }
+
+  .tape__echo {
+    display: none;
+  }
+}
+
 /* ── Reduced motion ─────────────────────────────────────────────────────────
  * Ambient animation stops outright; the few transitions that communicate state
  * are collapsed rather than removed, so a state change is still legible.
@@ -287,5 +331,15 @@ p {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /* Scroll reveals start at `opacity: 0`, written inline by Motion. Under
+   * reduced motion the JS renders the end state directly, but this makes the
+   * content visible from the first painted frame regardless of when the script
+   * runs — the reveal is an enhancement, never the thing that makes a section
+   * appear. See also the <noscript> override in app/layout.tsx. */
+  [data-reveal] {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }

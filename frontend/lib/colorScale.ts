@@ -101,6 +101,27 @@ export function rgbToCss(rgb: RGB): string {
   return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
 }
 
+/** Blend two colours. Used by the map's sweep, which paints each country from
+ * the no-data colour to its value as the sweep line reaches it. */
+export function mixRgb(from: RGB, to: RGB, t: number): RGB {
+  const clamped = Math.min(1, Math.max(0, t));
+  return [
+    lerp(from[0], to[0], clamped),
+    lerp(from[1], to[1], clamped),
+    lerp(from[2], to[2], clamped),
+  ];
+}
+
+/** The ramp as a CSS gradient, so the legend shows the continuous scale the map
+ * actually uses rather than a handful of sampled swatches. */
+export function rampCss(domain: Domain, steps = 12): string {
+  const ramp = domain.type === 'diverging' ? DIVERGING : SEQUENTIAL;
+  const stops = Array.from({ length: steps }, (_, i) =>
+    rgbToCss(sample(ramp, i / (steps - 1))),
+  );
+  return `linear-gradient(to right, ${stops.join(', ')})`;
+}
+
 /** Evenly spaced legend stops with their labels. */
 export function legendStops(domain: Domain, count = 5): { color: RGB; label: string }[] {
   return Array.from({ length: count }, (_, i) => {
