@@ -323,3 +323,62 @@ def test_status_exposes_the_counters_without_exposing_a_caller(
 
 async def _empty():
     return []
+
+
+# ── the single-worker assumption (decision #44) ──────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("argv", "env", "expected"),
+    [
+        (["uvicorn", "main:app"], {}, None),
+        (["uvicorn", "main:app", "--workers", "4"], {}, 4),
+        (["uvicorn", "main:app", "--workers=4"], {}, 4),
+        (["gunicorn", "-w", "3", "main:app"], {}, 3),
+        (["uvicorn", "main:app"], {"WEB_CONCURRENCY": "8"}, 8),
+        (["uvicorn", "main:app", "--reload"], {}, None),
+    ],
+)
+def test_the_worker_count_is_read_from_how_the_process_was_started(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], env: dict[str, str], expected: int | None
+) -> None:
+    """`--workers N` forks children that inherit argv, so reading our own command
+    line covers the realistic case: somebody edits the systemd unit."""
+    from services import singleflight
+
+    monkeypatch.setattr("sys.argv", argv)
+    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    assert singleflight.detected_worker_count() == expected
+
+
+def test_multiple_workers_produce_a_loud_warning(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """Three subsystems are per-process by choice and one of them — the rate
+    limiter — is a security control. Its limits silently multiplying by the worker
+    count is the failure this exists to make audible."""
+    import logging
+
+    from services import singleflight
+
+    monkeypatch.setattr("sys.argv", ["uvicorn", "main:app", "--workers", "4"])
+    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    with caplog.at_level(logging.WARNING, logger="services.singleflight"):
+        assert singleflight.warn_if_multi_worker() == 4
+
+    message = " ".join(caplog.messages)
+    assert "rate limit" in message.lower()
+    assert "4x" in message
+
+
+def test_a_single_worker_says_nothing(monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+    """The normal case must be silent, or the warning stops being read."""
+    import logging
+
+    from services import singleflight
+
+    monkeypatch.setattr("sys.argv", ["uvicorn", "main:app"])
+    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
+    with caplog.at_level(logging.WARNING, logger="services.singleflight"):
+        assert singleflight.warn_if_multi_worker() is None
+    assert not caplog.messages

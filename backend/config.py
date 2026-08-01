@@ -94,7 +94,11 @@ class Settings(BaseSettings):
     qwen_api_key: str | None = None
     # NVIDIA NIM — the agent's second provider (decision #38). Not part of the
     # narration rotation (#7), which is untouched. The agent skips it silently when
-    # the key is absent, which is the state on a deployment that has not set one.
+    # the key is absent, which is the state on a deployment that has not set one —
+    # and is still the state here: the credential supplied on 2026-08-01 returns
+    # HTTP 403 on every inference call and was therefore not installed. Note that
+    # `GET /v1/models` answers 200 for *any* string, so a successful model listing
+    # is not evidence a NIM key works; only a completion call is.
     nvidia_nim_api_key: str | None = None
 
     # ── Admin ──
@@ -228,7 +232,17 @@ class Settings(BaseSettings):
     # Probed 2026-08-01 — large, medium and small all emit tool calls; large was the
     # only one to name the exact indicator code unprompted.
     mistral_agent_model: str = "mistral-large-latest"
-    nvidia_nim_model: str = "moonshotai/kimi-k2-instruct"
+    # Probed 2026-08-01: `moonshotai/kimi-k2-instruct` reached **end of life on
+    # 2026-05-12** and now answers HTTP 410 Gone, so this leg would have failed on
+    # its first real use even with a working key. The same free-tier slug churn that
+    # withdrew two OpenRouter models in Phase 3, in a new place — which is why every
+    # one of these is a setting rather than a literal.
+    #
+    # Replaced with a slug NVIDIA currently lists. Its tool-calling behaviour is
+    # **unverified**: every inference call with the supplied credential returned
+    # HTTP 403, so nothing about this provider can be confirmed until a working key
+    # exists. Recorded as unverified rather than presented as tested.
+    nvidia_nim_model: str = "meta/llama-3.3-70b-instruct"
     # How many tool calls one question may make before the loop is cut. Six is two
     # comfortable rankings plus a lookup; past that the model is circling rather
     # than converging, and each turn is real quota.

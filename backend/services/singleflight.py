@@ -16,15 +16,16 @@ again.
 **Scope, stated plainly:** these are in-process `asyncio` primitives and they
 coordinate one event loop. The service runs a single uvicorn worker
 (`uvicorn main:app` with no `--workers`), so that is the whole process and the
-guarantee holds. Adding workers would silently reduce this to one-per-worker
-rather than one globally; the upgrade path is a Postgres advisory lock keyed on
-the same string, which is deliberately *not* used today because it would hold a
-pooled connection open for the length of a cold GPU call on a 1 vCPU box.
+guarantee holds. See `warn_if_multi_worker` at the bottom of this file for what
+happens if that ever stops being true, and decision #44 for why the constraint is
+detected rather than removed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -100,3 +101,68 @@ async def await_in_flight(key: str, *, timeout: float, appear_within: float = 0.
         # The owner logs and handles its own failure; a bystander just proceeds
         # without the result it was hoping to borrow.
         return None
+
+
+# ── the single-worker assumption, made loud (decision #44) ───────────────────
+
+
+def detected_worker_count() -> int | None:
+    """How many workers this process was started with, if it can be told.
+
+    `--workers N` forks children that inherit the parent's `argv`, and gunicorn's
+    `-w` behaves the same way, so reading our own command line covers the realistic
+    case: somebody edits the systemd unit. `WEB_CONCURRENCY` is checked because it
+    is the convention both honour without a flag. None means "cannot tell", which is
+    reported as exactly that rather than as one.
+    """
+    concurrency = os.environ.get("WEB_CONCURRENCY", "").strip()
+    if concurrency.isdigit():
+        return int(concurrency)
+
+    argv = sys.argv
+    for index, token in enumerate(argv):
+        if token in ("--workers", "-w") and index + 1 < len(argv) and argv[index + 1].isdigit():
+            return int(argv[index + 1])
+        if token.startswith("--workers=") and token.partition("=")[2].isdigit():
+            return int(token.partition("=")[2])
+    return None
+
+
+def warn_if_multi_worker() -> int | None:
+    """Say so, loudly, if three safety properties have quietly stopped holding.
+
+    Three subsystems are in-process by deliberate choice, and each degrades
+    differently under `--workers N`:
+
+    * **this module** — coalescing becomes one-per-worker, so a cold country can
+      cost N GPU calls instead of one. Wasteful, not wrong.
+    * **`services/telemetry.py`** — `/status` reports one worker's counters, so
+      every rate is computed over a fraction of the traffic. Misleading.
+    * **`services/ratelimit.py`** — each worker enforces its own copy, so the
+      effective limits multiply by N. **That one is a security control**, and it
+      failing quietly is the reason this function exists at all.
+
+    Deliberately a warning rather than a refusal to start. A deployment that adds
+    workers is usually responding to load, and taking the site down to make a point
+    about rate-limit arithmetic would be the worse outcome — the operator needs to
+    be told, not overruled. The upgrade path, when it is needed: move the limiter
+    and the counters behind Postgres (a counter table with an upsert per request is
+    a ~10 ms write against a request that takes seconds), and single-flight behind a
+    Postgres advisory lock. The lock is deliberately *not* used today because it
+    would hold a pooled connection for the length of a cold GPU call on a 1 vCPU
+    box; that objection is about the GPU call, not about the lock, so it does not
+    extend to the limiter.
+    """
+    workers = detected_worker_count()
+    if workers is not None and workers > 1:
+        logger.warning(
+            "Started with %d workers. Single-flight coalescing, the chat rate limiter "
+            "and the /status counters are all per-process: coalescing becomes "
+            "one-per-worker, the reported rates cover ~1/%d of traffic, and the "
+            "effective chat rate limits are %dx what is configured. See "
+            "services/singleflight.py:warn_if_multi_worker.",
+            workers,
+            workers,
+            workers,
+        )
+    return workers

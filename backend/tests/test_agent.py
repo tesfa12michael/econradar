@@ -761,6 +761,44 @@ def test_a_signed_tool_call_still_goes_back_as_a_function_call():
     assert contents[1]["parts"][0]["functionResponse"]["name"] == RANK_COUNTRIES
 
 
+# ── the provider rotation ────────────────────────────────────────────────────
+
+
+def test_the_documented_agent_order_is_not_reordered_by_accident():
+    """CLAUDE.md's hard rule, for the agent's own list. Decision #39 chose
+    `mistral_agent` -> `nvidia_nim` -> `gemini_flash`; changing it is a decision-log
+    entry, not an edit."""
+    from config import settings
+
+    assert settings.agent_provider_order == ("mistral_agent", "nvidia_nim", "gemini_flash")
+
+
+def test_a_provider_without_a_key_is_skipped_rather_than_failed(monkeypatch):
+    """This is what "the rotation is two deep in practice" means mechanically.
+
+    A member with no key must drop out of the list entirely, not be attempted and
+    fail — an attempted-and-failed provider costs a request, a log line and a
+    handover on every single question.
+    """
+    from config import settings
+    from services import providers
+
+    monkeypatch.setattr(settings, "mistral_api_key", "set")
+    monkeypatch.setattr(settings, "nvidia_nim_api_key", None)
+    monkeypatch.setattr(settings, "google_agent_platform_api_key", "set")
+    assert providers.configured_providers(settings.agent_provider_order) == [
+        "mistral_agent",
+        "gemini_flash",
+    ]
+
+    monkeypatch.setattr(settings, "nvidia_nim_api_key", "set")
+    assert providers.configured_providers(settings.agent_provider_order) == [
+        "mistral_agent",
+        "nvidia_nim",
+        "gemini_flash",
+    ]
+
+
 # ── presentation ─────────────────────────────────────────────────────────────
 
 

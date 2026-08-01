@@ -17,6 +17,7 @@ from db import dispose_engine
 from logging_config import configure_logging, get_logger
 from routers import ai_router, data_router, health_router
 from scheduler import shutdown_scheduler, start_scheduler
+from services.singleflight import warn_if_multi_worker
 
 logger = get_logger(__name__)
 
@@ -29,6 +30,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         settings.environment,
         settings.app_version,
     )
+    # Says so loudly if the single-worker assumption three subsystems rely on has
+    # stopped holding (decision #44). A warning, not a refusal: an operator adding
+    # workers is responding to load and needs telling, not overruling.
+    warn_if_multi_worker()
     start_scheduler()  # non-fatal if disabled or no DATABASE_URL
     try:
         yield
