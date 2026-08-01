@@ -51,12 +51,15 @@ from services.groundedness import verify
 
 logger = get_logger(__name__)
 
-INSUFFICIENT_DATA = (
-    "The data available here does not cover that. EconRadar holds official "
-    "macroeconomic series from the World Bank, IMF, FRED, BIS and the World Bank "
-    "DataBank — try naming a country and an indicator such as inflation, GDP growth, "
-    "unemployment or government debt."
+#: What to try instead. Kept separate from the sentence announcing the gap, because
+#: the tools often supply a far better one of those than this module could.
+SUGGESTION = (
+    "EconRadar holds official macroeconomic series from the World Bank, IMF, FRED, "
+    "BIS and the World Bank DataBank — try naming a country and an indicator such as "
+    "inflation, GDP growth, unemployment or government debt."
 )
+
+INSUFFICIENT_DATA = f"The data available here does not cover that. {SUGGESTION}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +191,11 @@ async def stream_chat(
             dict.fromkeys(r.reader_message for r in results if r.reader_message)
         ).strip()
         logger.info("chat: every tool call came back empty — %s", detail[:200])
-        yield {"type": "token", "text": f"{detail} {INSUFFICIENT_DATA}".strip()}
+        # The generic blurb only when there is nothing specific to say. Appending it
+        # to a precise message ("EconRadar holds no inflation for Gibraltar — the
+        # series covers 193 other countries") restates the same fact twice and reads
+        # like the system did not hear itself.
+        yield {"type": "token", "text": f"{detail} {SUGGESTION}".strip() or INSUFFICIENT_DATA}
         yield {
             "type": "verdict",
             "grounded": True,

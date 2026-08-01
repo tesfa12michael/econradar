@@ -132,6 +132,20 @@ def claims_a_global_superlative(answer: str) -> bool:
     return False
 
 
+#: Sent back to a model that tried to answer without querying anything. Written as
+#: a user turn rather than a system rule because the system prompt already says this
+#: and was ignored — a model that has just produced an answer responds to being told
+#: the answer was rejected, not to being told the rule again.
+NO_QUERY_NUDGE = (
+    "That answer was rejected: it was written without querying the database, so "
+    "nothing in it can be checked. Every answer here must come from a tool result. "
+    "If the question names something ambiguous, call a tool with the word the "
+    "question used and report the options it gives back — do not list series from "
+    "your own knowledge, because this database holds 23 indicators and most of the "
+    "ones you can name are not among them."
+)
+
+
 class AgentState(TypedDict, total=False):
     """Graph state. Lists accumulate; scalars are replaced by the latest write."""
 
@@ -143,6 +157,7 @@ class AgentState(TypedDict, total=False):
     model: str | None
     attempts: Annotated[list[str], operator.add]
     failure: str | None
+    nudged: bool
 
 
 @dataclass(slots=True)
@@ -247,6 +262,13 @@ async def _tools_node(state: AgentState, config: RunnableConfig) -> dict[str, An
     }
 
 
+async def _nudge_node(state: AgentState, config: RunnableConfig) -> dict[str, Any]:
+    """Tell the model its unqueried answer was rejected, and let it try once."""
+    del config
+    logger.info("agent: answered without querying — asking once more")
+    return {"turns": [AgentTurn(role="user", text=NO_QUERY_NUDGE)], "nudged": True}
+
+
 def _route(state: AgentState) -> str:
     """Loop while the model wants tools and the budget allows."""
     if state.get("failure"):
@@ -256,6 +278,13 @@ def _route(state: AgentState) -> str:
         return END
     last = turns[-1]
     if last.role != "assistant" or not last.tool_calls:
+        # Prose with no query behind it. `run_agent` refuses it outright, but a
+        # refusal is a worse answer than the one the tools would have given, and the
+        # cause is usually a model deciding it already knows — "What is Japan's GDP?"
+        # produced five invented series names rather than one lookup. Worth exactly
+        # one more attempt; a second would be a model that cannot be told.
+        if not state.get("nudged") and not state.get("calls_made", 0):
+            return "nudge"
         return END
     if state.get("calls_made", 0) >= settings.agent_max_tool_calls:
         # Out of budget. The loop stops rather than being cut mid-call, and the
@@ -275,9 +304,11 @@ def build_graph():
     graph = StateGraph(AgentState)
     graph.add_node("model", _model_node)
     graph.add_node("tools", _tools_node)
+    graph.add_node("nudge", _nudge_node)
     graph.set_entry_point("model")
-    graph.add_conditional_edges("model", _route, {"tools": "tools", END: END})
+    graph.add_conditional_edges("model", _route, {"tools": "tools", "nudge": "nudge", END: END})
     graph.add_edge("tools", "model")
+    graph.add_edge("nudge", "model")
     return graph.compile()
 
 

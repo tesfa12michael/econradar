@@ -676,6 +676,26 @@ async def test_an_answer_with_no_query_behind_it_is_refused(monkeypatch, one_pro
     assert answers[0].text == ""
     assert "without querying the database" in answers[0].failure
 
+    # It is asked once more before being refused — a refusal is a worse answer than
+    # the one the tools would have given, and the usual cause is a model that
+    # decided it already knew.
+    assert len(provider.seen) == 2
+    assert provider.seen[1][-1].text == agent_module.NO_QUERY_NUDGE
+
+
+async def test_the_model_is_only_nudged_once(monkeypatch, one_provider):
+    """A model that ignores the nudge is a model that cannot be told. Two rounds of
+    this on a public endpoint with no rate limit is two model calls per question."""
+    provider = _ScriptedProvider(
+        _completion(text="GDP could mean several things"),
+        _completion(text="I still think it could mean several things"),
+    )
+    monkeypatch.setattr(agent_module.providers, "complete_with_tools", provider)
+
+    async for _ in agent_module.run_agent(None, "What is Japan's GDP?", []):
+        pass
+    assert len(provider.seen) == 2
+
 
 def test_a_window_supplied_alongside_latest_only_is_honoured():
     """`latest_only` defaults to true, so a model that supplies dates and leaves it
