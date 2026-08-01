@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # free Qwen3-VL slug was withdrawn (decision #28). Transport only — the VLM
     # fallback order in docs/architecture.md #9 is unchanged.
     qwen_api_key: str | None = None
+    # NVIDIA NIM — the agent's second provider (decision #38). Not part of the
+    # narration rotation (#7), which is untouched. The agent skips it silently when
+    # the key is absent, which is the state on a deployment that has not set one.
+    nvidia_nim_api_key: str | None = None
 
     # ── Admin ──
     admin_health_token_hash: str | None = None
@@ -210,6 +214,32 @@ class Settings(BaseSettings):
     # Separately switchable because they reject text the numeric check accepts, and
     # a bad rule here would silently suppress correct answers.
     semantic_checks_enabled: bool = True
+
+    # ── Economic agent (the chatbot's intelligence layer) ──
+    agent_enabled: bool = True
+    # A *separate* rotation from PROVIDER_ORDER, recorded as decision #38 rather
+    # than edited into #7. Two reasons it has to be separate: tool calling is a
+    # capability, not a preference — a provider that cannot make a structured tool
+    # call cannot run this loop at all — and the owner judged the remaining
+    # rotation members too weak for multi-step reasoning over real data.
+    agent_provider_order: tuple[str, ...] = ("mistral_agent", "nvidia_nim", "gemini_flash")
+    # Deliberately not `mistral_model`: narration reads a paragraph off a data block
+    # and small is fine, while the agent has to choose tools and read their output.
+    # Probed 2026-08-01 — large, medium and small all emit tool calls; large was the
+    # only one to name the exact indicator code unprompted.
+    mistral_agent_model: str = "mistral-large-latest"
+    nvidia_nim_model: str = "moonshotai/kimi-k2-instruct"
+    # How many tool calls one question may make before the loop is cut. Six is two
+    # comfortable rankings plus a lookup; past that the model is circling rather
+    # than converging, and each turn is real quota.
+    agent_max_tool_calls: int = 6
+    # A hard ceiling on rows any single tool call can return, applied server-side
+    # after the model's own argument. The agent cannot widen it.
+    agent_max_rows: int = 200
+    # The final answer needs room for figures, dates and metric-type qualifiers,
+    # which is more than a narration paragraph.
+    agent_max_tokens: int = 1200
+    agent_timeout_seconds: float = 90.0
 
     # ── RAG (feature 2.2) ──
     rag_top_k: int = 8

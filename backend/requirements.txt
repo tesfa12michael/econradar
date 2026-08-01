@@ -52,6 +52,16 @@ jinja2>=3.1,<4
 # so a deployment that never serves a chat query never pays for it.
 fastembed>=0.4,<1
 
+# LangGraph — the chatbot's agent loop (decision #38). Graph and state machine
+# only: the model calls still go through services/providers.py over raw httpx, so
+# no langchain-mistralai / -google-genai / -nvidia-ai-endpoints packages are pulled
+# in. That is the same choice providers.py has always made, and it is what let
+# Gemini and Qwen3-VL move hosts in Phase 3 for the cost of a URL.
+# Footprint measured before adding: 11.7 MB across langgraph, langchain-core and
+# their transitive deps (orjson, ormsgpack, xxhash, zstandard, jsonpatch) — pure
+# Python plus small wheels, no torch, no CUDA.
+langgraph>=1.0,<2
+
 # Matplotlib (Agg backend) — server-side chart PNGs for the VLM pipeline
 # (feature 2.1). NOT Plotly + Kaleido: Kaleido 1.x drives an external headless
 # Chrome per render, which this 1 vCPU / 2 GB box cannot afford alongside the API

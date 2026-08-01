@@ -1,0 +1,563 @@
+"""The economic agent — tool loop, guardrails, and the chat event contract.
+
+These replace `test_rag.py`. What is being proven changed with the mechanism: the
+old tests asked whether retrieval found the right chunks, and these ask whether an
+answer can be built from anything other than a tool result. That is the stronger
+question, and it is the one the production failures were about.
+
+The provider is stubbed throughout. What needs proving is not that Mistral can
+call a function — it demonstrably can — but that the loop around it cannot be made
+to produce an answer the data does not support.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from services import agent as agent_module
+from services import chat as chat_module
+from services.agent import (
+    asks_for_a_ranking,
+    claims_a_global_superlative,
+    evidence_context,
+    trim_history,
+)
+from services.agent_tools import QUERY_OBSERVATIONS, RANK_COUNTRIES, ToolResult
+from services.providers import AgentTurn, ToolCall, ToolCompletion
+
+
+async def _collect(events) -> list[dict]:
+    return [event async for event in events]
+
+
+# ── the superlative guardrail ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which country has the highest debt-to-GDP ratio?",
+        "Which 5 countries have the lowest unemployment?",
+        "Show me the top economies by GDP per capita",
+        "Who has the worst current account balance?",
+        "Rank countries by inflation",
+    ],
+)
+def test_a_superlative_question_is_recognised(question):
+    assert asks_for_a_ranking(question)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "What is the most recent inflation figure for Japan?",
+        "What is Nigeria's inflation rate?",
+        "How has Brazil's policy rate moved since 1994?",
+    ],
+)
+def test_an_ordinary_question_is_not_forced_into_a_ranking(question):
+    """A false positive here costs a wasted tool call and drags an irrelevant
+    league table into a single-country answer. "most recent" is the specific trap."""
+    assert not asks_for_a_ranking(question)
+
+
+def test_a_worldwide_claim_is_detected():
+    assert claims_a_global_superlative("Montenegro has the highest debt-to-GDP in the world.")
+
+
+def test_the_same_claim_phrased_as_a_negative_is_detected():
+    """ "No country has a lower rate" is "this is the lowest" with different words,
+    and a guard that only knew superlatives would wave it straight through."""
+    assert claims_a_global_superlative("No country worldwide has a lower unemployment rate.")
+    assert claims_a_global_superlative("No other country in the world carries more debt.")
+
+
+def test_a_comparison_against_a_subset_is_not_a_global_claim():
+    """ "The world's largest economies" describes a subset; it does not claim to be
+    the largest. This sentence was rejected by the first draft of the guard, which
+    is precisely the failure the guard exists to avoid being — so "the world's …"
+    was dropped as a scope marker. The trade is deliberate: it misses "Venezuela has
+    the world's highest debt", and the prompt plus the question-side directive
+    remain responsible for that phrasing."""
+    assert not claims_a_global_superlative(
+        "Japan's rate is lower than in the world's largest economies."
+    )
+
+
+def test_a_within_series_superlative_is_left_alone():
+    """The false positive that would matter most.
+
+    "Japan's highest reading since 1998" is a claim about one series and is
+    perfectly answerable from a single-country lookup. A guard that rejected it
+    would suppress correct answers, which is worse than the failure it prevents —
+    the same lesson decision #33 records about over-strict verification.
+    """
+    assert not claims_a_global_superlative(
+        "That was Japan's highest unemployment reading since 1998."
+    )
+    assert not claims_a_global_superlative("Inflation peaked at its highest level in 2022.")
+
+
+# ── conversation context ─────────────────────────────────────────────────────
+
+
+def test_history_is_trimmed_to_the_documented_four_turns():
+    history = [{"role": "user", "content": f"q{i}"} for i in range(20)]
+    assert len(trim_history(history)) == 8  # four turns, two messages each
+
+
+def test_history_keeps_the_most_recent_turns():
+    history = [{"role": "user", "content": f"q{i}"} for i in range(10)]
+    assert trim_history(history)[-1]["content"] == "q9"
+
+
+def test_blank_turns_are_dropped():
+    assert trim_history(
+        [{"role": "user", "content": "   "}, {"role": "user", "content": "hi"}]
+    ) == [{"role": "user", "content": "hi"}]
+
+
+# ── verification context ─────────────────────────────────────────────────────
+
+
+def _observation_result(value: float = 2.451) -> ToolResult:
+    return ToolResult(
+        name=QUERY_OBSERVATIONS,
+        arguments={"country": "JPN", "indicator": "unemployment"},
+        references=(("JPN", "SL.UEM.TOTL.ZS"),),
+        payload={
+            "country_code": "JPN",
+            "country_name": "Japan",
+            "indicator": {
+                "indicator_code": "SL.UEM.TOTL.ZS",
+                "indicator_name": "Unemployment, total (% of total labor force)",
+                "source": "world_bank",
+                "unit": "%",
+                "metric_type": "percent_of_labor_force",
+                "coverage_definition": "ilo_modelled",
+                "comparability_notes": "Modelled ILO estimate.",
+            },
+            "observations": [{"date": "2025-01-01", "value": value, "source": "world_bank"}],
+        },
+    )
+
+
+def test_the_verifier_context_is_exactly_what_the_tools_returned():
+    """The property that makes groundedness mean something under an agent.
+
+    The model saw these payloads and nothing else, so the numbers it may
+    legitimately write are the numbers walked out of them — by construction, not by
+    instruction.
+    """
+    from services.groundedness import verify
+
+    context = evidence_context([_observation_result()])
+    assert verify("Japan's unemployment rate was 2.5% in 2025.", context).passed
+    assert not verify("Japan's unemployment rate was 7.8% in 2025.", context).passed
+
+
+def test_a_failed_tool_call_grounds_nothing():
+    """A failed lookup's payload is an error message. A model quoting a figure
+    "from" it must not be grounded by the words in that message."""
+    from services.groundedness import verify
+
+    failed = ToolResult(
+        name=QUERY_OBSERVATIONS,
+        arguments={"country": "Wakanda", "indicator": "gdp_growth"},
+        ok=False,
+        reader_message="No country in the dataset matches 'Wakanda'.",
+        payload={"error": "No country matches 'Wakanda'."},
+    )
+    assert not verify("Wakanda's GDP grew 6.2% in 2025.", evidence_context([failed])).passed
+
+
+# ── the tool loop ────────────────────────────────────────────────────────────
+
+
+class _ScriptedProvider:
+    """Plays a fixed sequence of provider responses, recording what it was sent."""
+
+    def __init__(self, *responses: ToolCompletion) -> None:
+        self.responses = list(responses)
+        self.seen: list[list[AgentTurn]] = []
+
+    async def __call__(self, provider, system, turns, tools):
+        self.seen.append(list(turns))
+        return (
+            self.responses.pop(0)
+            if self.responses
+            else ToolCompletion(text="done", tool_calls=(), provider=provider, model="stub")
+        )
+
+
+def _completion(text="", calls=()) -> ToolCompletion:
+    return ToolCompletion(
+        text=text, tool_calls=tuple(calls), provider="mistral_agent", model="stub"
+    )
+
+
+@pytest.fixture
+def one_provider(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "agent_provider_order", ("mistral_agent",))
+    monkeypatch.setattr(settings, "mistral_api_key", "test-key")
+
+
+async def test_the_loop_runs_a_tool_then_answers(monkeypatch, one_provider):
+    scripted = _ScriptedProvider(
+        _completion(
+            calls=[ToolCall(id="c1", name=QUERY_OBSERVATIONS, arguments={"country": "JPN"})]
+        ),
+        _completion(text="Japan's unemployment rate was 2.5% in 2025 [1]."),
+    )
+    monkeypatch.setattr(agent_module.providers, "complete_with_tools", scripted)
+
+    async def fake_execute(_session, _name, _args):
+        return _observation_result()
+
+    monkeypatch.setattr(agent_module.agent_tools, "execute", fake_execute)
+
+    events = [item async for item in agent_module.run_agent(None, "japan unemployment")]
+    kinds = [kind for kind, _ in events]
+    assert kinds == ["tool", "answer"]
+    answer = events[-1][1]
+    assert "2.5%" in answer.text
+    assert len(answer.results) == 1
+
+    # The second model call must have seen the tool's output, or the loop is not a
+    # loop — it is two independent questions.
+    second_turns = scripted.seen[1]
+    assert second_turns[-1].role == "tool"
+    assert "2.451" in (second_turns[-1].text or "")
+
+
+async def test_the_tool_budget_stops_a_model_that_never_converges(monkeypatch, one_provider):
+    """A model that keeps calling tools has to be cut off by something other than
+    goodwill — every extra turn is real quota against a public endpoint."""
+    from config import settings
+
+    monkeypatch.setattr(settings, "agent_max_tool_calls", 2)
+
+    class _AlwaysCalls:
+        calls = 0
+
+        async def __call__(self, provider, system, turns, tools):
+            _AlwaysCalls.calls += 1
+            return _completion(
+                calls=[ToolCall(id=f"c{_AlwaysCalls.calls}", name=QUERY_OBSERVATIONS, arguments={})]
+            )
+
+    monkeypatch.setattr(agent_module.providers, "complete_with_tools", _AlwaysCalls())
+
+    async def fake_execute(_session, _name, _args):
+        return _observation_result()
+
+    monkeypatch.setattr(agent_module.agent_tools, "execute", fake_execute)
+
+    events = [item async for item in agent_module.run_agent(None, "loop forever")]
+    tool_events = [item for kind, item in events if kind == "tool"]
+    assert len(tool_events) <= settings.agent_max_tool_calls
+
+
+async def test_a_global_superlative_without_a_ranking_is_refused(monkeypatch, one_provider):
+    """The Montenegro guard, as a veto rather than a hint.
+
+    The model answers a worldwide superlative having only looked up one country.
+    That is exactly the production failure, and the prompt asking it not to is not
+    a control — this is.
+    """
+    scripted = _ScriptedProvider(
+        _completion(calls=[ToolCall(id="c1", name=QUERY_OBSERVATIONS, arguments={})]),
+        _completion(text="Montenegro has the highest debt-to-GDP ratio in the world."),
+    )
+    monkeypatch.setattr(agent_module.providers, "complete_with_tools", scripted)
+
+    async def fake_execute(_session, _name, _args):
+        return _observation_result()
+
+    monkeypatch.setattr(agent_module.agent_tools, "execute", fake_execute)
+
+    answer = [item for kind, item in [i async for i in agent_module.run_agent(None, "q")]][-1]
+    assert answer.text == ""
+    assert "without ranking every country" in (answer.failure or "")
+
+
+async def test_the_same_claim_stands_when_the_ranking_was_actually_run(monkeypatch, one_provider):
+    """The guard must not reject a superlative that *was* earned."""
+    scripted = _ScriptedProvider(
+        _completion(calls=[ToolCall(id="c1", name=RANK_COUNTRIES, arguments={})]),
+        _completion(text="Venezuela has the highest debt-to-GDP ratio in the world."),
+    )
+    monkeypatch.setattr(agent_module.providers, "complete_with_tools", scripted)
+
+    async def fake_execute(_session, _name, _args):
+        return ToolResult(name=RANK_COUNTRIES, arguments={}, payload={"country_count": 194})
+
+    monkeypatch.setattr(agent_module.agent_tools, "execute", fake_execute)
+
+    answer = [item for kind, item in [i async for i in agent_module.run_agent(None, "q")]][-1]
+    assert "Venezuela" in answer.text
+    assert answer.failure is None
+
+
+# ── the chat event contract ──────────────────────────────────────────────────
+
+
+@pytest.fixture
+def stub_cache(monkeypatch):
+    stored: list[dict] = []
+
+    async def no_hit(*_args, **_kwargs):
+        return None
+
+    async def store(_session, **kwargs):
+        stored.append(kwargs)
+
+    monkeypatch.setattr(chat_module, "get_cached_response", no_hit)
+    monkeypatch.setattr(chat_module, "store_response", store)
+    return stored
+
+
+def _stub_agent(monkeypatch, answer_text: str, results: list[ToolResult], failure=None):
+    from services.agent import AgentAnswer
+
+    async def fake_run(_session, _question, _history=None):
+        for result in results:
+            yield "tool", result
+        yield (
+            "answer",
+            AgentAnswer(
+                text=answer_text,
+                provider="mistral_agent",
+                model="mistral-large-latest",
+                results=results,
+                failure=failure,
+            ),
+        )
+
+    monkeypatch.setattr(chat_module, "run_agent", fake_run)
+
+
+@pytest.fixture
+def enabled(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "agent_enabled", True)
+    monkeypatch.setattr(settings, "llm_enabled", True)
+
+
+async def test_a_grounded_answer_emits_the_documented_event_order(monkeypatch, stub_cache, enabled):
+    _stub_agent(
+        monkeypatch, "Japan's unemployment rate was 2.5% in 2025 [1].", [_observation_result()]
+    )
+    events = await _collect(chat_module.stream_chat(None, "japan unemployment"))
+    kinds = [e["type"] for e in events]
+
+    assert kinds == ["tool", "citations", "token", "verdict", "done"]
+    assert kinds.count("verdict") == 1  # terminal and singular — the client depends on it
+    assert events[-1]["type"] == "done"
+    assert next(e for e in events if e["type"] == "verdict")["grounded"] is True
+    assert len(stub_cache) == 1
+
+
+async def test_a_fabricated_figure_is_retracted_and_never_cached(monkeypatch, stub_cache, enabled):
+    """41.7% is nowhere in the tool payload. The verdict must say so, and nothing
+    may be stored — a cached fabrication would be served again instantly."""
+    _stub_agent(monkeypatch, "Japan's unemployment averaged 41.7% [1].", [_observation_result()])
+    events = await _collect(chat_module.stream_chat(None, "japan unemployment"))
+    verdict = next(e for e in events if e["type"] == "verdict")
+
+    assert verdict["grounded"] is False
+    assert "41.7" in verdict["reason"]
+    assert stub_cache == []
+
+
+async def test_a_citation_pointing_past_the_evidence_is_retracted(monkeypatch, stub_cache, enabled):
+    """A fabricated source is as serious as a fabricated figure (decision #30)."""
+    _stub_agent(monkeypatch, "Unemployment was 2.5% in 2025 [7].", [_observation_result()])
+    verdict = next(
+        e for e in await _collect(chat_module.stream_chat(None, "q")) if e["type"] == "verdict"
+    )
+    assert verdict["grounded"] is False
+    assert "[7]" in verdict["reason"]
+
+
+async def test_a_citation_marker_is_not_scored_as_a_number(monkeypatch, stub_cache, enabled):
+    """`[1]` matches the verifier's number pattern exactly as a bare 1 would."""
+    _stub_agent(monkeypatch, "Unemployment was 2.5% in 2025-01-01 [1].", [_observation_result()])
+    verdict = next(
+        e for e in await _collect(chat_module.stream_chat(None, "q")) if e["type"] == "verdict"
+    )
+    assert verdict["grounded"] is True, verdict.get("reason")
+
+
+async def test_every_tool_failing_answers_plainly_instead_of_retracting(
+    monkeypatch, stub_cache, enabled
+):
+    """A country the database does not hold deserves a sentence, not a retraction.
+
+    Found live: the first no-data question produced model prose the verifier then
+    had to withdraw — a correct outcome presented to the reader as a failure.
+    """
+    absent = ToolResult(
+        name=QUERY_OBSERVATIONS,
+        arguments={"country": "Wakanda", "indicator": "gdp_growth"},
+        ok=False,
+        reader_message="No country in the dataset matches 'Wakanda'.",
+        payload={"error": "No country matches 'Wakanda'. Use an ISO-3 code such as JPN."},
+    )
+    _stub_agent(monkeypatch, "Wakanda grew 6.2% last year.", [absent])
+    events = await _collect(chat_module.stream_chat(None, "wakanda gdp"))
+    text = next(e for e in events if e["type"] == "token")["text"]
+    verdict = next(e for e in events if e["type"] == "verdict")
+
+    assert "Wakanda" in text and "6.2" not in text
+    # The model's prose never reaches the reader, and no internal instruction does
+    # either — "Use an ISO-3 code" is written for the model, not for a person.
+    assert "ISO-3" not in text
+    assert verdict["grounded"] is True
+    assert stub_cache == []
+
+
+async def test_a_cache_hit_skips_the_model(monkeypatch, enabled):
+    from services.cache import CachedResponse
+
+    _stub_agent(monkeypatch, "unused", [_observation_result()])
+
+    async def hit(*_args, **_kwargs):
+        return CachedResponse(
+            text="Japan's unemployment rate was 2.5% in 2025 [1].",
+            provider="mistral_agent",
+            model="mistral-large-latest",
+            groundedness_score=1.0,
+        )
+
+    monkeypatch.setattr(chat_module, "get_cached_response", hit)
+    verdict = next(
+        e for e in await _collect(chat_module.stream_chat(None, "q")) if e["type"] == "verdict"
+    )
+    assert verdict["cached"] is True and verdict["grounded"] is True
+
+
+async def test_an_empty_question_is_rejected_immediately():
+    assert [e["type"] for e in await _collect(chat_module.stream_chat(None, "   "))] == [
+        "error",
+        "done",
+    ]
+
+
+async def test_the_collected_form_withholds_an_unverified_answer(monkeypatch, stub_cache, enabled):
+    _stub_agent(monkeypatch, "Japan's unemployment averaged 41.7% [1].", [_observation_result()])
+    result = await chat_module.answer_chat(None, "q")
+    assert result["answer"] == ""
+    assert result["grounded"] is False
+    assert result["error"]
+    # The tool trail is returned either way, so a caller can see what was consulted
+    # even when the answer did not survive.
+    assert result["tools"][0]["name"] == QUERY_OBSERVATIONS
+
+
+def test_citations_come_from_tool_results_not_similarity():
+    citations = chat_module.citations_for([_observation_result()])
+    assert len(citations) == 1
+    assert citations[0].country_code == "JPN"
+    assert citations[0].indicator_code == "SL.UEM.TOTL.ZS"
+    assert citations[0].index == 1
+
+
+# ── wire formats ─────────────────────────────────────────────────────────────
+
+
+def test_mistral_content_parts_are_read_as_text():
+    """Mistral returns `content` as a list of typed chunks once tool calling is in
+    play. Reading `.strip()` off it is an AttributeError, not an empty answer —
+    which is how it failed on the very first live run."""
+    from services.providers import _content_text
+
+    assert _content_text("plain") == "plain"
+    assert (
+        _content_text(
+            [{"type": "text", "text": "Japan's rate "}, {"type": "text", "text": "is 2.5%."}]
+        )
+        == "Japan's rate is 2.5%."
+    )
+    # Reasoning parts are the scratchpad, not the answer: showing them to a reader
+    # is bad, and feeding them to the verifier is worse.
+    assert (
+        _content_text([{"type": "thinking", "text": "maybe 9%?"}, {"type": "text", "text": "2.5%"}])
+        == "2.5%"
+    )
+
+
+def test_a_tool_result_becomes_a_user_turn_for_gemini():
+    """Google models a function response as something the caller hands back, so it
+    carries the `user` role. Getting this wrong makes the model reissue the call."""
+    from services.providers import _to_gemini_contents
+
+    contents = _to_gemini_contents(
+        [
+            AgentTurn(role="user", text="japan unemployment"),
+            AgentTurn(
+                role="assistant",
+                tool_calls=(
+                    ToolCall(
+                        id="g0",
+                        name="query_observations",
+                        arguments={"country": "JPN"},
+                        signature="sig-abc",
+                    ),
+                ),
+            ),
+            AgentTurn(
+                role="tool",
+                text='{"value": 2.451}',
+                tool_call_id="g0",
+                tool_name="query_observations",
+            ),
+        ]
+    )
+    assert [c["role"] for c in contents] == ["user", "model", "user"]
+    assert "functionCall" in contents[1]["parts"][0]
+    # Gemini 3.x rejects the next turn with HTTP 400 when the signature is missing.
+    assert contents[1]["parts"][0]["thoughtSignature"] == "sig-abc"
+    assert contents[2]["parts"][0]["functionResponse"]["name"] == "query_observations"
+    # It must be an object, never a bare string.
+    assert isinstance(contents[2]["parts"][0]["functionResponse"]["response"], dict)
+
+
+def test_tool_calls_survive_the_openai_round_trip():
+    from services.providers import _to_openai_messages
+
+    messages = _to_openai_messages(
+        "sys",
+        [
+            AgentTurn(role="user", text="q"),
+            AgentTurn(
+                role="assistant",
+                tool_calls=(
+                    ToolCall(id="c1", name="rank_countries", arguments={"indicator": "x"}),
+                ),
+            ),
+            AgentTurn(role="tool", text="{}", tool_call_id="c1", tool_name="rank_countries"),
+        ],
+    )
+    assert messages[0]["role"] == "system"
+    call = messages[2]["tool_calls"][0]
+    assert call["id"] == "c1"
+    # Arguments go back as a JSON *string* in this dialect, not an object.
+    assert json.loads(call["function"]["arguments"]) == {"indicator": "x"}
+    assert messages[3]["tool_call_id"] == "c1"
+
+
+def test_malformed_tool_arguments_degrade_instead_of_raising():
+    """A model emitting broken JSON must reach the tool, which then says what it
+    needed — a raise here would lose the whole question."""
+    from services.providers import _decode_arguments
+
+    assert _decode_arguments('{"country": "JPN"}') == {"country": "JPN"}
+    assert _decode_arguments("{not json") == {}
+    assert _decode_arguments(None) == {}
+    assert _decode_arguments({"already": "object"}) == {"already": "object"}

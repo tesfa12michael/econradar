@@ -8,6 +8,7 @@ before anything touches the database.
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -313,6 +314,11 @@ class ChatResponse(BaseModel):
 
     answer: str
     citations: list[CitationOut] = []
+    #: What the agent did to reach the answer — one entry per tool call, with the
+    #: same summary the SSE `tool` events carried. Returned so a non-streaming
+    #: caller can still see whether a superlative was answered by ranking every
+    #: country or by a single-country lookup.
+    tools: list[dict[str, Any]] = []
     grounded: bool = False
     groundedness_score: float | None = None
     provider: str | None = None

@@ -48,7 +48,7 @@ def _iso3(country_code: str) -> str:
 
 def _history(request: ChatRequest) -> list[dict[str, str]]:
     """Conversation turns as plain dicts. Trimming to the documented four turns
-    happens in `services/rag.py`, so the limit is enforced once, server-side,
+    happens in `services/agent.py`, so the limit is enforced once, server-side,
     however the request arrived."""
     return [turn.model_dump() for turn in request.history]
 

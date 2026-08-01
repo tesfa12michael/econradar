@@ -26,11 +26,19 @@ import { Card, Skeleton } from './ui';
 
 type Status = 'streaming' | 'verified' | 'retracted' | 'error';
 
+/** One database query the agent ran on the way to its answer. */
+interface ToolStep {
+  name: string;
+  summary: string;
+  ok: boolean;
+}
+
 interface Answer {
   id: number;
   question: string;
   text: string;
   citations: Citation[];
+  tools: ToolStep[];
   status: Status;
   provider?: string | null;
   score?: number | null;
@@ -73,7 +81,7 @@ export function ChatPanel() {
       const id = nextId.current++;
       setAnswers((prev) => [
         ...prev,
-        { id, question: trimmed, text: '', citations: [], status: 'streaming' },
+        { id, question: trimmed, text: '', citations: [], tools: [], status: 'streaming' },
       ]);
       setInput('');
       setBusy(true);
@@ -114,7 +122,28 @@ export function ChatPanel() {
               continue;
             }
 
-            if (event.type === 'citations') {
+            if (event.type === 'tool') {
+              // The agent queries before it writes, so these arrive first and are
+              // the only feedback during that phase. They also make the guarantee
+              // visible: a ranking answer shows that every country was read.
+              setAnswers((prev) =>
+                prev.map((a) =>
+                  a.id === id
+                    ? {
+                        ...a,
+                        tools: [
+                          ...a.tools,
+                          {
+                            name: String(event.name ?? ''),
+                            summary: String(event.summary ?? ''),
+                            ok: event.ok !== false,
+                          },
+                        ],
+                      }
+                    : a,
+                ),
+              );
+            } else if (event.type === 'citations') {
               patch({ citations: (event.citations as Citation[]) ?? [] });
             } else if (event.type === 'token') {
               text += String(event.text ?? '');
@@ -151,9 +180,9 @@ export function ChatPanel() {
       {answers.length === 0 && (
         <Card>
           <p style={{ color: 'var(--text-secondary)' }} className="mb-3 text-sm leading-relaxed">
-            Ask about any country and indicator EconRadar tracks. Answers are built only
-            from retrieved records, every figure is cited, and anything that cannot be
-            verified against the data is withheld rather than guessed.
+            Ask about any country and indicator EconRadar tracks. Every figure comes from a
+            live query against the database — you can see which queries ran — and anything
+            that cannot be verified against them is withheld rather than guessed.
           </p>
           <ul className="flex flex-col gap-2">
             {EXAMPLES.map((example) => (
@@ -231,6 +260,20 @@ function AnswerBlock({ answer }: { answer: Answer }) {
       </p>
 
       <Card>
+        {answer.tools.length > 0 && (
+          <ul className="mb-3 flex flex-col gap-1 text-xs">
+            {answer.tools.map((tool, i) => (
+              <li
+                key={`${tool.name}-${i}`}
+                style={{ color: tool.ok ? 'var(--text-tertiary)' : 'var(--warn)' }}
+              >
+                <span aria-hidden>{tool.ok ? '▸ ' : '! '}</span>
+                {tool.summary}
+              </li>
+            ))}
+          </ul>
+        )}
+
         <div aria-live="polite" aria-busy={streaming}>
           {streaming && answer.text.length === 0 && (
             <div className="space-y-2">
