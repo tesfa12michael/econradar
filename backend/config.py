@@ -241,13 +241,15 @@ class Settings(BaseSettings):
     agent_max_tokens: int = 1200
     agent_timeout_seconds: float = 90.0
 
-    # ── RAG (feature 2.2) ──
-    rag_top_k: int = 8
-    # Retrieval below this cosine similarity is treated as "nothing relevant found",
-    # which triggers the insufficient-data refusal rather than a grounded-looking guess.
-    rag_min_similarity: float = 0.25
+    # ── Chat (feature 2.2) ──
+    # `rag_top_k`, `rag_min_similarity` and `embedding_model` were removed with the
+    # retrieval path (decision #40). A setting whose reader has been deleted is worse
+    # than no setting: it stays in .env and in DEPLOYMENT.md, and the next person
+    # tunes it expecting something to happen.
+    #
+    # How many prior turns of a conversation the agent is given. Enforced
+    # server-side in services/agent.py, not trusted from the client.
     rag_context_turns: int = 4
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     @property
     def google_api_key(self) -> str | None:

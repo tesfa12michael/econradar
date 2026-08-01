@@ -17,6 +17,18 @@ change, a hyperinflation-era rate quoted as though it sat on today's scale. Thos
 answers score 1.00 here and are false. `verify()` therefore runs both and requires
 both; see `GroundednessReport.passed`.
 
+**Arithmetic the reader can check** (decision #41). "Copied from the evidence" was
+too narrow a definition of grounded. Japan at 2.5% and Germany at 3.7%, both read
+out of tool results, make "a gap of 1.2 percentage points" a fact — and the first
+version of this module retracted the whole answer over it, because 1.2 was not in
+the context. So a figure that is *not* in the evidence gets a second test: is it
+exact arithmetic on figures stated in the same sentence? A difference, a sum, a
+mean, a ratio or a percentage change, recomputed here and required to match. The
+operands must be in the sentence, which is the safety property — the model has
+shown its working, the reader can check it, and nothing can be derived from a
+number that was itself invented. Arithmetic that is merely *asserted* still fails:
+"2.5% against 3.7% is a gap of 4.4 points" is rejected exactly as before.
+
 **What it deliberately does not do:** it does not repair. A response that fails is
 discarded and the next provider is tried, because silently editing a model's prose
 to match the data would make the verifier's own output unverifiable.
@@ -28,7 +40,9 @@ requires digits copied verbatim, and `APPROXIMATION_TERMS` below flags the speci
 vocabulary of computed ratios ("half", "double", "twice", "tenfold"), which are
 numeric claims however they are spelled. Plain counting words ("one", "two") are
 *not* flagged: they carry structural meaning in ordinary prose ("one of the
-largest") and treating them as claims would reject honest narration.
+largest") and treating them as claims would reject honest narration. A ratio word
+is cleared by the same rule as a derived figure: quote both numbers in the sentence
+and the multiple is checked rather than assumed.
 """
 
 from __future__ import annotations
@@ -40,14 +54,17 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config import settings
+from logging_config import get_logger
 from services.semantics import SemanticReport, check_semantics
+
+logger = get_logger(__name__)
 
 # Digit-bearing figures only. Thousands separators and a leading sign are consumed
 # so "$1,234.5" and "-2.1%" each yield one number rather than three.
 _NUMBER_RE = re.compile(r"(?<![\w.])[-+]?\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w])[-+]?\d*\.?\d+")
 
 # Ratio and multiple vocabulary. Each asserts a computed relationship between two
-# numbers, which is arithmetic the model is not permitted to do.
+# numbers — a numeric claim carrying no digits for the extractor to check.
 APPROXIMATION_TERMS: tuple[str, ...] = (
     "half",
     "a third",
@@ -62,6 +79,46 @@ APPROXIMATION_TERMS: tuple[str, ...] = (
     "tenfold",
     "an order of magnitude",
 )
+
+#: The multiple each term claims, where it claims a definite one. A term in this
+#: map is cleared when the sentence quotes two grounded figures whose ratio matches;
+#: "an order of magnitude" is deliberately absent, because it names a range rather
+#: than a number and there is nothing to check it against.
+RATIO_TERMS: dict[str, float] = {
+    "half": 0.5,
+    "a third": 1 / 3,
+    "a quarter": 0.25,
+    "a fifth": 0.2,
+    "double": 2.0,
+    "doubled": 2.0,
+    "twice": 2.0,
+    "triple": 3.0,
+    "tripled": 3.0,
+    "threefold": 3.0,
+    "tenfold": 10.0,
+}
+
+#: Ratio words are approximations by construction — "roughly double" for 1.96 is
+#: honest English, and holding it to the 0.5% tolerance used for copied digits would
+#: reject the ordinary use of the word. The band is wider *because* both operands are
+#: on the page: the reader is being offered a summary of visible arithmetic, not a
+#: figure they have to take on trust.
+RATIO_WORD_TOLERANCE = 0.10
+
+#: "the second half of 2025" is a period, not a ratio. Without this the word alone
+#: fails an otherwise correct answer.
+_PERIOD_HALF_RE = re.compile(
+    r"\b(?:first|second|latter|later|earlier|1st|2nd)\s+half\b|\bhalf\s+of\s+(?:19|20)\d\d\b",
+    re.IGNORECASE,
+)
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+
+#: Beyond this many figures, a sentence is a list — a top-ten ranking, a table row —
+#: not a derivation, and every extra operand widens the set of values that would
+#: count as "derived". Capped so the second chance stays a second chance rather than
+#: becoming a way for any number to look reachable.
+MAX_DERIVATION_OPERANDS = 8
 
 # Rescalings a narrator may legitimately apply to a supplied value: writing
 # 3.4 trillion for 3_400_000_000_000. Grounding these can only ever match a real
@@ -177,6 +234,98 @@ def _matches(value: float, allowed: set[float], tolerance: float) -> bool:
     return False
 
 
+def derivations(operands: list[float]) -> set[float]:
+    """Every value a reader could reproduce from these figures with one operation.
+
+    Deliberately a short list. Differences, sums, means, ratios and percentage
+    changes are what an analyst writes and what a reader checks; anything longer —
+    a compound growth rate, a weighted average — is a calculation the model must not
+    be doing in its head, and admitting it here would be admitting the failure this
+    module exists to catch.
+    """
+    out: set[float] = set()
+    for i, a in enumerate(operands):
+        for b in operands[i + 1 :]:
+            out.update({a - b, b - a, a + b, (a + b) / 2})
+            if b:
+                out.add(a / b)
+                out.add((a - b) / b * 100)
+            if a:
+                out.add(b / a)
+                out.add((b - a) / a * 100)
+    return {value for value in out if math.isfinite(value)}
+
+
+def _reproduces(literal: str, value: float, candidates: set[float]) -> bool:
+    """Whether some candidate, written out, gives exactly the digits in `literal`.
+
+    Not `_matches`. That function's 0.5% band is the right tolerance for a figure
+    *copied* from the evidence and rounded for readability, and the wrong one here:
+    a sentence quoting seven figures produces on the order of a hundred candidate
+    derivations, and a ±0.5% window around each is enough for an invented number to
+    land on one by chance. A test caught precisely that — "41.7%" was accepted as
+    16.95 + 24.66 = 41.61, which it is not.
+
+    So a derivation has to reproduce the digits the model actually wrote: the
+    candidate must round to the literal at the precision the literal was given to.
+    Half a unit in the last place, which is what rounding means, and nothing wider.
+    """
+    half_ulp = 0.5 * 10.0 ** -len(literal.partition(".")[2]) + 1e-9
+    return any(
+        abs(candidate / scale - value) <= half_ulp for candidate in candidates for scale in _SCALES
+    )
+
+
+def _derivable(text: str, allowed: set[float], tolerance: float) -> set[float]:
+    """Ungrounded values that are exact arithmetic on grounded figures beside them.
+
+    Sentence by sentence, because the sentence is what makes this safe: the operands
+    have to be in front of the reader. Across a whole answer, "some two numbers
+    somewhere produce this" is close to no constraint at all.
+    """
+    rescued: set[float] = set()
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        numbers = extract_numbers(sentence)
+        pending = [
+            (literal, value)
+            for literal, value in numbers
+            if not _matches(value, allowed, tolerance)
+        ]
+        if not pending:
+            continue
+        operands = [value for _, value in numbers if _matches(value, allowed, tolerance)]
+        if not 2 <= len(operands) <= MAX_DERIVATION_OPERANDS:
+            continue
+        candidates = derivations(operands)
+        rescued.update(
+            value for literal, value in pending if _reproduces(literal, value, candidates)
+        )
+    return rescued
+
+
+def _approximation_terms(text: str, allowed: set[float], tolerance: float) -> tuple[str, ...]:
+    """Ratio words that the sentence around them does not substantiate."""
+    flagged: list[str] = []
+    for sentence in _SENTENCE_SPLIT_RE.split(text):
+        lowered = sentence.lower()
+        operands = [
+            value for _, value in extract_numbers(sentence) if _matches(value, allowed, tolerance)
+        ]
+        ratios = [a / b for a in operands for b in operands if b and a != b]
+        for term in APPROXIMATION_TERMS:
+            if not re.search(rf"\b{re.escape(term)}\b", lowered):
+                continue
+            if term == "half" and _PERIOD_HALF_RE.search(lowered):
+                continue
+            claimed = RATIO_TERMS.get(term)
+            if claimed is not None and any(
+                abs(ratio - claimed) <= RATIO_WORD_TOLERANCE * claimed for ratio in ratios
+            ):
+                continue
+            flagged.append(term)
+    return tuple(dict.fromkeys(flagged))
+
+
 def verify(text: str, context: Any, *, tolerance: float | None = None) -> GroundednessReport:
     """Score `text` against the numbers in `context`.
 
@@ -189,9 +338,14 @@ def verify(text: str, context: Any, *, tolerance: float | None = None) -> Ground
     allowed = collect_allowed(context)
     numbers = extract_numbers(text)
 
-    ungrounded = tuple(literal for literal, value in numbers if not _matches(value, allowed, tol))
-    lowered = text.lower()
-    approximations = tuple(term for term in APPROXIMATION_TERMS if term in lowered)
+    # Copied first, derived second. A figure that is simply in the evidence never
+    # needs the arithmetic path, so the common case costs nothing.
+    unmatched = {value for _, value in numbers if not _matches(value, allowed, tol)}
+    derived = _derivable(text, allowed, tol) if unmatched else set()
+    ungrounded = tuple(
+        literal for literal, value in numbers if value in unmatched and value not in derived
+    )
+    approximations = _approximation_terms(text, allowed, tol)
 
     # Meaning, not just arithmetic (decisions #32-#34). Run even when there are no
     # numbers to score: prose can still describe a rise as a fall.
@@ -211,6 +365,16 @@ def verify(text: str, context: Any, *, tolerance: float | None = None) -> Ground
 
     grounded = len(numbers) - len(ungrounded)
     score = grounded / len(numbers)
+    # Recorded, not silent. A figure accepted because the arithmetic checked out is
+    # a weaker claim than one copied verbatim, and the log line should say when the
+    # second path was used — "silent failures are never acceptable" applies to
+    # silent acceptances too.
+    if derived:
+        logger.info(
+            "groundedness: %d figure(s) accepted as arithmetic on figures in the same sentence: %s",
+            len(derived),
+            sorted(derived),
+        )
     if approximations:
         score = min(score, 0.0)
     return GroundednessReport(
@@ -219,4 +383,5 @@ def verify(text: str, context: Any, *, tolerance: float | None = None) -> Ground
         ungrounded=ungrounded,
         approximations=approximations,
         semantic=semantic,
+        extra={"derived": sorted(derived)} if derived else {},
     )

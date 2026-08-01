@@ -118,17 +118,88 @@ def test_prose_with_no_figures_is_trivially_grounded():
     assert report.total_numbers == 0
 
 
-def test_an_approximation_term_fails_even_with_correct_figures():
+def test_an_unsupported_ratio_word_still_fails():
     """features.md 1.5's "roughly a fifth vs 20%" case.
 
-    The figures here are all real; the violation is the *claimed ratio*, which is
-    arithmetic the model was not permitted to do and which carries no digits for
-    the extractor to check.
+    A ratio word is a numeric claim carrying no digits. With nothing beside it to
+    check it against, there is nothing to do but reject it.
     """
-    report = verify("Inflation at 33.2% is roughly double the 16.95% seen in 2021.", CONTEXT)
+    report = verify("Inflation is roughly double what it was a few years ago.", CONTEXT)
     assert not report.passed
     assert "double" in report.approximations
     assert "approximation terms" in report.reason()
+
+
+def test_a_ratio_word_is_cleared_when_both_figures_are_quoted(caplog):
+    """Decision #41. 33.2 / 16.95 is 1.96, and "roughly double" is a fair reading of
+    that — a summary of arithmetic the reader can do from the same sentence. This
+    was rejected before, which is the over-strictness the owner reported."""
+    report = verify("Inflation at 33.2% is roughly double the 16.95% seen in 2021.", CONTEXT)
+    assert report.approximations == ()
+    assert report.passed
+
+
+def test_a_ratio_word_that_does_not_hold_is_still_rejected():
+    # 33.2 is not ten times 24.66, and quoting both does not make it so.
+    report = verify("Inflation at 33.2% is tenfold the 24.66% of 2023.", CONTEXT)
+    assert "tenfold" in report.approximations
+    assert not report.passed
+
+
+def test_half_a_year_is_not_a_ratio():
+    """ "the second half of 2024" is a period. Flagging the word alone failed
+    otherwise-correct answers."""
+    assert verify("Inflation reached 33.2% in the second half of 2024.", CONTEXT).passed
+
+
+# ── arithmetic a reader can check (decision #41) ──────────────────────────────
+
+
+def test_a_difference_between_two_quoted_figures_is_grounded():
+    """The reported over-strictness, in its simplest form. 18.85 and 33.2 are both in
+    the evidence; 14.35 is their difference, is not precomputed anywhere, and was
+    being called a fabrication — retracting the whole answer over it.
+
+    (The 2023→2024 move is *not* used here: `changes` already supplies +8.54, so it
+    would pass on the old rule and prove nothing.)
+    """
+    report = verify(
+        "Inflation rose from 18.85% in 2022 to 33.2% in 2024, a rise of 14.35 percentage points.",
+        CONTEXT,
+    )
+    assert report.passed
+    assert report.extra["derived"] == [pytest.approx(14.35)]
+
+
+def test_arithmetic_that_is_simply_wrong_is_still_caught():
+    """The property that makes the relaxation safe: the difference is recomputed,
+    not taken on trust. Without this the rule would be "any number near two other
+    numbers is fine"."""
+    report = verify(
+        "Inflation went from 18.85% in 2022 to 33.2% in 2024, a rise of 20.1 points.", CONTEXT
+    )
+    assert not report.passed
+    assert "20.1" in report.ungrounded
+
+
+def test_a_derivation_must_show_its_operands():
+    """The operands have to be in the same sentence. "The average was 28.93%" may be
+    true arithmetic on two figures elsewhere in the answer, but a reader cannot see
+    that, and across a whole answer "some two numbers produce this" is barely a
+    constraint at all."""
+    report = verify("Inflation averaged 28.93% over the period.", CONTEXT)
+    assert not report.passed
+    assert "28.93" in report.ungrounded
+
+
+def test_a_fabrication_beside_real_figures_is_not_rescued():
+    """A long list of real numbers must not become cover for an invented one."""
+    report = verify(
+        "Inflation ran 16.95% in 2021, 18.85% in 2022, 24.66% in 2023 and 41.7% in 2025.",
+        CONTEXT,
+    )
+    assert not report.passed
+    assert "41.7" in report.ungrounded
 
 
 def test_ordinary_counting_words_are_not_treated_as_claims():

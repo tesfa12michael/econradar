@@ -171,6 +171,133 @@ async def test_a_concept_resolves_to_the_primary_series() -> None:
         mod.list_indicator_metadata = original
 
 
+# ── saying it the way a person would (decision #42) ──────────────────────────
+# Measured before this existed: of 29 phrasings a reader would plausibly use, 26
+# resolved to nothing — including "government debt", which is the concept's own
+# name with a space in it. Every one was a question the database could answer.
+
+
+def _catalog() -> list[IndicatorMetadataOut]:
+    return [
+        _meta("GGXWDG_NGDP", concept="government_debt", is_primary_for_concept=True),
+        _meta(
+            "GC.DOD.TOTL.GD.ZS",
+            concept="government_debt",
+            coverage_definition="central_government",
+            is_primary_for_concept=False,
+            country_count=109,
+        ),
+        _meta("SL.UEM.TOTL.ZS", concept="unemployment", is_primary_for_concept=True),
+        _meta("NY.GDP.MKTP.KD.ZG", concept="gdp_growth", is_primary_for_concept=True),
+        _meta("NY.GDP.PCAP.CD", concept="gdp_per_capita", is_primary_for_concept=True),
+        _meta("FP.CPI.TOTL.ZG", concept="inflation", is_primary_for_concept=True),
+        _meta("FRED.CPI", concept="price_level", is_primary_for_concept=True),
+        _meta("CBPOL", concept="policy_rate", is_primary_for_concept=True),
+        _meta("FRED.GOV10Y", concept="bond_yield", is_primary_for_concept=True),
+    ]
+
+
+def _with_fake_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    catalog = _catalog()
+
+    async def fake_list(_session, *, concept=None, indicator_code=None):
+        if indicator_code:
+            return [m for m in catalog if m.indicator_code == indicator_code]
+        if concept:
+            found = [m for m in catalog if m.concept == concept]
+            found.sort(key=lambda m: (not m.is_primary_for_concept, -m.country_count))
+            return found
+        return catalog
+
+    monkeypatch.setattr(rankings, "list_indicator_metadata", fake_list)
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        # the concept's own name, spelled the way a person spells it
+        ("government debt", "GGXWDG_NGDP"),
+        ("Government-Debt", "GGXWDG_NGDP"),
+        # a qualifier that names the kind of number, not the subject
+        ("unemployment rate", "SL.UEM.TOTL.ZS"),
+        ("inflation rate", "FP.CPI.TOTL.ZG"),
+        ("debt-to-GDP ratio", "GGXWDG_NGDP"),
+        # everyday synonyms
+        ("public debt", "GGXWDG_NGDP"),
+        ("national debt", "GGXWDG_NGDP"),
+        ("jobless rate", "SL.UEM.TOTL.ZS"),
+        ("economic growth", "NY.GDP.MKTP.KD.ZG"),
+        ("income per person", "NY.GDP.PCAP.CD"),
+        ("cost of living", "FP.CPI.TOTL.ZG"),
+        ("consumer price index", "FRED.CPI"),
+        ("central bank rate", "CBPOL"),
+        ("10-year yield", "FRED.GOV10Y"),
+        # and the code still wins outright
+        ("GC.DOD.TOTL.GD.ZS", "GC.DOD.TOTL.GD.ZS"),
+    ],
+)
+async def test_everyday_wording_reaches_the_right_series(
+    monkeypatch: pytest.MonkeyPatch, token: str, expected: str
+) -> None:
+    _with_fake_catalog(monkeypatch)
+    resolved = await rankings.resolve_indicator(None, token)
+    assert resolved is not None, f"{token!r} resolved to nothing"
+    assert resolved.indicator_code == expected
+
+
+@pytest.mark.parametrize(
+    ("token", "options"),
+    [
+        ("gdp", {"NY.GDP.MKTP.KD.ZG", "NY.GDP.PCAP.CD"}),
+        ("GDP", {"NY.GDP.MKTP.KD.ZG", "NY.GDP.PCAP.CD"}),
+        ("interest rate", {"CBPOL", "FRED.GOV10Y"}),
+        ("CPI", {"FP.CPI.TOTL.ZG", "FRED.CPI"}),
+    ],
+)
+async def test_a_word_meaning_two_things_is_not_guessed(
+    monkeypatch: pytest.MonkeyPatch, token: str, options: set[str]
+) -> None:
+    """The half of the fix that is easy to get wrong.
+
+    Resolving "GDP" to growth because growth sorts first would be a real figure,
+    correctly sourced, and not the number the reader asked for — the exact
+    metric-confusion failure the indicator metadata exists to prevent. So an
+    ambiguous word returns the choices, and `resolve_indicator` returns None rather
+    than picking.
+    """
+    _with_fake_catalog(monkeypatch)
+    resolution = await rankings.resolve_indicator_request(None, token)
+    assert resolution.ambiguous
+    assert resolution.match is None
+    assert {m.indicator_code for m in resolution.candidates} == options
+    assert await rankings.resolve_indicator(None, token) is None
+
+
+async def test_gdp_says_the_level_is_not_held(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ "What is Japan's GDP?" has no answer here at all — the catalog holds growth
+    and per-capita, no level. Naming that is more use than listing two near-misses."""
+    _with_fake_catalog(monkeypatch)
+    resolution = await rankings.resolve_indicator_request(None, "gdp")
+    assert resolution.note is not None
+    assert "no GDP *level* series" in resolution.note
+
+
+async def test_a_qualifier_is_never_stripped_off_a_real_concept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`policy_rate` ends in "rate". Stripping before matching would turn it into
+    `policy`, which is nothing — the reason the strip runs last."""
+    _with_fake_catalog(monkeypatch)
+    resolved = await rankings.resolve_indicator(None, "policy_rate")
+    assert resolved is not None and resolved.indicator_code == "CBPOL"
+
+
+async def test_nonsense_still_resolves_to_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_fake_catalog(monkeypatch)
+    for token in ("gdp_in_bananas", "not_a_thing", "  ", ""):
+        assert await rankings.resolve_indicator(None, token) is None
+
+
 def test_an_unknown_indicator_says_where_to_look(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

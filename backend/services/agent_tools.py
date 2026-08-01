@@ -32,7 +32,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import settings
 from logging_config import get_logger
 from models import CountryProfile
-from services.rankings import list_indicator_metadata, rank_countries, resolve_indicator
+from services.rankings import (
+    IndicatorResolution,
+    list_indicator_metadata,
+    rank_countries,
+    resolve_indicator_request,
+)
 
 logger = get_logger(__name__)
 
@@ -108,7 +113,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                             "gdp_per_capita, current_account, exports, imports, "
                             "policy_rate, bond_yield, exchange_rate, price_level, "
                             "industrial_production, equity_market). A concept resolves "
-                            "to the series best suited to cross-country comparison."
+                            "to the series best suited to cross-country comparison. "
+                            "Everyday wording works too — 'public debt', 'jobless rate', "
+                            "'stock market'. A word that could mean two of these, such "
+                            "as 'GDP' or 'interest rate', comes back with the choices "
+                            "rather than a guess."
                         ),
                     },
                     "latest_only": {
@@ -149,7 +158,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "properties": {
                     "indicator": {
                         "type": "string",
-                        "description": "An indicator code or a concept, as above.",
+                        "description": "An indicator code, a concept or everyday wording, as above.",
                     },
                     "order": {
                         "type": "string",
@@ -237,6 +246,66 @@ async def _resolve_country(session: AsyncSession, token: str) -> tuple[str, str 
     return None
 
 
+async def _indicator_failure(
+    session: AsyncSession, name: str, args: dict[str, Any], resolution: IndicatorResolution
+) -> ToolResult:
+    """The tool result for a token that named no single series.
+
+    Two very different outcomes share this shape. **Ambiguous** means the catalog
+    holds more than one thing by that name, and the caller is handed the choices so
+    it can ask again — one extra round trip, against silently ranking countries on
+    GDP growth because someone said "GDP". **Unknown** means nothing matches, and
+    the concept list travels with the error so the next attempt is informed rather
+    than another guess.
+    """
+    token = resolution.token
+    if resolution.ambiguous:
+        options = [
+            {
+                "indicator": m.concept or m.indicator_code,
+                "indicator_code": m.indicator_code,
+                "indicator_name": m.indicator_name,
+                "unit": m.unit,
+                "country_count": m.country_count,
+            }
+            for m in resolution.candidates
+        ]
+        readable = " or ".join(f"{o['indicator_name']}" for o in options)
+        return ToolResult(
+            name=name,
+            arguments=args,
+            ok=False,
+            reader_message=(
+                f"{token!r} could mean {readable} in this dataset"
+                + (f". {resolution.note}" if resolution.note else ".")
+            ),
+            payload={
+                "error": (
+                    f"{token!r} is ambiguous: it matches more than one series. Call this "
+                    f"tool again naming one of the options below. Do not choose by "
+                    f"guessing which the user meant — they measure different things."
+                ),
+                **({"note": resolution.note} if resolution.note else {}),
+                "options": options,
+            },
+        )
+
+    available = await list_indicator_metadata(session)
+    return ToolResult(
+        name=name,
+        arguments=args,
+        ok=False,
+        reader_message=(
+            resolution.note or f"EconRadar does not track anything matching {token!r}."
+        ),
+        payload={
+            "error": f"No indicator or concept matches {token!r}.",
+            **({"note": resolution.note} if resolution.note else {}),
+            "available_concepts": sorted({m.concept for m in available if m.concept}),
+        },
+    )
+
+
 async def run_query_observations(session: AsyncSession, args: dict[str, Any]) -> ToolResult:
     """Observations for one (country, indicator), fully described."""
     country_token = str(args.get("country") or "")
@@ -270,19 +339,10 @@ async def run_query_observations(session: AsyncSession, args: dict[str, Any]) ->
         )
     country_code, country_name = resolved
 
-    meta = await resolve_indicator(session, indicator_token)
-    if meta is None:
-        available = await list_indicator_metadata(session)
-        return ToolResult(
-            name=QUERY_OBSERVATIONS,
-            arguments=args,
-            ok=False,
-            reader_message=f"EconRadar does not track anything matching {indicator_token!r}.",
-            payload={
-                "error": f"No indicator or concept matches {indicator_token!r}.",
-                "available_concepts": sorted({m.concept for m in available if m.concept}),
-            },
-        )
+    resolution = await resolve_indicator_request(session, indicator_token)
+    if resolution.match is None:
+        return await _indicator_failure(session, QUERY_OBSERVATIONS, args, resolution)
+    meta = resolution.match
 
     latest_only = args.get("latest_only", True)
     if isinstance(latest_only, str):
@@ -316,29 +376,11 @@ async def run_query_observations(session: AsyncSession, args: dict[str, Any]) ->
     truncated = not latest_only and len(rows) > limit
     rows = rows[:limit]
 
-    if not rows:
-        return ToolResult(
-            name=QUERY_OBSERVATIONS,
-            arguments=args,
-            ok=False,
-            reader_message=(
-                f"The dataset holds no observations of {meta.indicator_name} for "
-                f"{country_name or country_code}."
-            ),
-            payload={
-                "error": (
-                    f"The database holds no observations of "
-                    f"{meta.indicator_name} for {country_name or country_code}. "
-                    "Say this is not available rather than estimating it."
-                ),
-                "country": country_code,
-                "indicator_code": meta.indicator_code,
-            },
-        )
-
     # Total coverage, always — so an answer built on a handful of rows cannot
     # describe the record as thin. This is the same failure decision #32 fixed for
-    # the anomaly corpus, in a new place.
+    # the anomaly corpus, in a new place. Read *before* deciding what an empty
+    # result means, because that is the whole difference between the two answers
+    # below.
     coverage = (
         await session.execute(
             text(
@@ -349,6 +391,84 @@ async def run_query_observations(session: AsyncSession, args: dict[str, Any]) ->
             {"country": country_code, "code": meta.indicator_code},
         )
     ).one()
+
+    if not rows and coverage.n:
+        # The series exists for this country; the *window* excluded it. Reporting
+        # that as "the database holds no observations" is false, and it is false in
+        # the direction that matters — a reader takes it to mean the figure does not
+        # exist. Measured before the fix: Japan's unemployment from 1960 to 1970 came
+        # back as "the dataset holds no observations of unemployment for Japan",
+        # about a country whose series this tool answers correctly for 2025. Same
+        # class as the recency-window bug in `run_rank_countries` below.
+        #
+        # ok=True, deliberately: something true and useful was found, so the model
+        # writes the answer — and the dates it needs are in the payload it is
+        # verified against. Silently widening the window would be the wrong repair;
+        # the caller asked for those years and is owed a straight answer about them.
+        logger.info(
+            "tool %s: %s/%s -> 0 rows, but the series holds %d (%s..%s)",
+            QUERY_OBSERVATIONS,
+            country_code,
+            meta.indicator_code,
+            coverage.n,
+            coverage.first,
+            coverage.last,
+        )
+        return ToolResult(
+            name=QUERY_OBSERVATIONS,
+            arguments=args,
+            references=((country_code, meta.indicator_code),),
+            payload={
+                "country_code": country_code,
+                "country_name": country_name,
+                "indicator": _indicator_block(meta),
+                "series_coverage": {
+                    "observation_count": coverage.n,
+                    "first_observation": str(coverage.first),
+                    "last_observation": str(coverage.last),
+                },
+                "observations": [],
+                "requested_window": {
+                    "start_date": str(_iso_date(args.get("start_date")) or ""),
+                    "end_date": str(_iso_date(args.get("end_date")) or ""),
+                },
+                "no_data_in_requested_window": (
+                    f"This series holds {coverage.n} observations for "
+                    f"{country_name or country_code}, from {coverage.first} to "
+                    f"{coverage.last}, but none inside the dates asked for. Say that "
+                    f"EconRadar's record begins when it does — do NOT say the country "
+                    f"has no data for this indicator, because it does."
+                ),
+            },
+        )
+
+    if not rows:
+        # Nothing at all for this pair. Said as a fact about the dataset, with the
+        # coverage of the series elsewhere alongside it, so neither the model nor a
+        # reader can hear it as "this figure does not exist".
+        return ToolResult(
+            name=QUERY_OBSERVATIONS,
+            arguments=args,
+            ok=False,
+            reader_message=(
+                f"EconRadar holds no {meta.indicator_name} for "
+                f"{country_name or country_code}. The series covers "
+                f"{meta.country_count} other countries — this is a gap in this "
+                f"dataset, not a statement about the country."
+            ),
+            payload={
+                "error": (
+                    f"The database holds no observations of {meta.indicator_name} for "
+                    f"{country_name or country_code}, although the series covers "
+                    f"{meta.country_count} other countries. Say that EconRadar does not "
+                    f"hold it — not that the figure does not exist — and do not "
+                    f"estimate it."
+                ),
+                "country": country_code,
+                "indicator_code": meta.indicator_code,
+                "countries_covered_by_this_series": meta.country_count,
+            },
+        )
 
     logger.info(
         "tool %s: %s/%s -> %d rows (latest_only=%s)",
@@ -413,6 +533,14 @@ async def run_rank_countries(session: AsyncSession, args: dict[str, Any]) -> Too
         int(max_age) if isinstance(max_age, (int, float, str)) and str(max_age).isdigit() else None
     )
 
+    # Resolved here rather than left to `rank_countries` so an ambiguous token gets
+    # the choices back instead of "no ranking is available for 'gdp'", which reads
+    # as an absence of data and is not one.
+    resolution = await resolve_indicator_request(session, indicator_token)
+    if resolution.match is None:
+        return await _indicator_failure(session, RANK_COUNTRIES, args, resolution)
+    indicator_token = resolution.match.indicator_code
+
     result = await rank_countries(
         session, indicator_token, order=order, limit=limit, max_age_years=max_age
     )
@@ -440,15 +568,21 @@ async def run_rank_countries(session: AsyncSession, args: dict[str, Any]) -> Too
             result = unfiltered
 
     if result is None or not result.entries:
-        available = await list_indicator_metadata(session)
+        # The indicator resolved, so this is not a naming problem: the series simply
+        # has no current value for any country.
         return ToolResult(
             name=RANK_COUNTRIES,
             arguments=args,
             ok=False,
-            reader_message=f"EconRadar cannot rank countries on {indicator_token!r}.",
+            reader_message=(
+                f"EconRadar holds no values to rank countries on {resolution.match.indicator_name}."
+            ),
             payload={
-                "error": f"No ranking is available for {indicator_token!r}.",
-                "available_concepts": sorted({m.concept for m in available if m.concept}),
+                "error": (
+                    f"No country has a value for {resolution.match.indicator_code}, so "
+                    f"there is nothing to rank. Say so rather than estimating an order."
+                ),
+                "indicator_code": resolution.match.indicator_code,
             },
         )
 

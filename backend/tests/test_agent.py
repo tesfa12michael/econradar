@@ -473,6 +473,7 @@ async def test_a_recency_filter_that_excludes_everything_is_dropped(monkeypatch)
 
     from schemas import IndicatorMetadataOut, RankingEntryOut, RankingOut
     from services import agent_tools as tools_module
+    from services import rankings
 
     meta = IndicatorMetadataOut(
         indicator_code="SL.UEM.TOTL.ZS", indicator_name="Unemployment", source="world_bank"
@@ -499,7 +500,11 @@ async def test_a_recency_filter_that_excludes_everything_is_dropped(monkeypatch)
         # The window excludes everything; without it there are 187 countries.
         return None if max_age_years is not None else full
 
+    async def fake_resolve(_session, token):
+        return rankings.IndicatorResolution(token=token, match=meta)
+
     monkeypatch.setattr(tools_module, "rank_countries", fake_rank)
+    monkeypatch.setattr(tools_module, "resolve_indicator_request", fake_resolve)
     result = await tools_module.run_rank_countries(
         None, {"indicator": "unemployment", "max_age_years": 1}
     )
@@ -511,6 +516,144 @@ async def test_a_recency_filter_that_excludes_everything_is_dropped(monkeypatch)
     assert (
         result.payload["recency_filter_dropped"]["most_recent_observation_anywhere"] == "2025-01-01"
     )
+
+
+# ── missing here vs missing everywhere (decision #42) ────────────────────────
+
+
+class _FakeSession:
+    """Answers the two `text()` queries `run_query_observations` runs, in order:
+    the windowed row fetch, then the total coverage for the pair."""
+
+    def __init__(self, rows: list, coverage: tuple[int, str | None, str | None]) -> None:
+        self._rows, self._coverage, self._calls = rows, coverage, 0
+
+    async def execute(self, *_args, **_kwargs):
+        self._calls += 1
+        session = self
+
+        class _Result:
+            def all(self_inner):
+                return session._rows
+
+            def one(self_inner):
+                count, first, last = session._coverage
+                return type("Row", (), {"n": count, "first": first, "last": last})()
+
+        return _Result()
+
+
+def _row(date: str, value: float):
+    return type("Row", (), {"observation_date": date, "value": value, "source": "world_bank"})()
+
+
+async def _query(monkeypatch, session, args) -> ToolResult:
+    from schemas import IndicatorMetadataOut
+    from services import agent_tools as tools_module
+    from services import rankings
+
+    meta = IndicatorMetadataOut(
+        indicator_code="SL.UEM.TOTL.ZS",
+        indicator_name="Unemployment, total (% of total labor force)",
+        source="world_bank",
+        country_count=187,
+    )
+
+    async def fake_country(_session, token):
+        return ("JPN", "Japan") if token.upper() != "VGB" else ("VGB", "British Virgin Islands")
+
+    async def fake_resolve(_session, token):
+        return rankings.IndicatorResolution(token=token, match=meta)
+
+    monkeypatch.setattr(tools_module, "_resolve_country", fake_country)
+    monkeypatch.setattr(tools_module, "resolve_indicator_request", fake_resolve)
+    return await tools_module.run_query_observations(session, args)
+
+
+async def test_a_window_outside_the_record_is_not_an_absence_of_data(monkeypatch):
+    """The reported failure, reproduced. Japan's unemployment from 1960 to 1970 came
+    back as "the dataset holds no observations of unemployment for Japan" — about a
+    country this same tool answers correctly for 2025. The window was outside the
+    record; the record exists.
+    """
+    session = _FakeSession([], (35, "1991-01-01", "2025-01-01"))
+    result = await _query(
+        monkeypatch,
+        session,
+        {
+            "country": "JPN",
+            "indicator": "unemployment",
+            "latest_only": False,
+            "start_date": "1960-01-01",
+            "end_date": "1970-01-01",
+        },
+    )
+
+    assert result.ok is True, "a series that exists must not be reported as absent"
+    assert result.payload["observations"] == []
+    assert result.payload["series_coverage"] == {
+        "observation_count": 35,
+        "first_observation": "1991-01-01",
+        "last_observation": "2025-01-01",
+    }
+    assert "1991-01-01" in result.payload["no_data_in_requested_window"]
+    assert result.payload["requested_window"]["start_date"] == "1960-01-01"
+
+
+async def test_a_country_the_dataset_omits_says_so_without_claiming_the_world(monkeypatch):
+    """The other side of the same distinction. Nothing at all for this pair — said as
+    a fact about EconRadar, with the series' coverage elsewhere alongside it, so
+    neither the model nor a reader hears "this figure does not exist"."""
+    session = _FakeSession([], (0, None, None))
+    result = await _query(monkeypatch, session, {"country": "VGB", "indicator": "unemployment"})
+
+    assert result.ok is False
+    assert "EconRadar holds no" in result.reader_message
+    assert "187 other countries" in result.reader_message
+    assert result.payload["countries_covered_by_this_series"] == 187
+    assert "not that the figure does not exist" in result.payload["error"]
+
+
+async def test_rows_inside_the_window_still_answer_normally(monkeypatch):
+    session = _FakeSession([_row("2025-01-01", 2.5)], (35, "1991-01-01", "2025-01-01"))
+    result = await _query(monkeypatch, session, {"country": "JPN", "indicator": "unemployment"})
+
+    assert result.ok is True
+    assert result.payload["observations"] == [
+        {"date": "2025-01-01", "value": 2.5, "source": "world_bank"}
+    ]
+    assert "no_data_in_requested_window" not in result.payload
+
+
+async def test_an_ambiguous_indicator_returns_the_choices_not_a_guess(monkeypatch):
+    """A tool that picks for the model is a tool that decides what the question was."""
+    from schemas import IndicatorMetadataOut
+    from services import agent_tools as tools_module
+    from services import rankings
+
+    growth = IndicatorMetadataOut(
+        indicator_code="NY.GDP.MKTP.KD.ZG", indicator_name="GDP growth (annual %)", source="wb"
+    )
+    per_capita = IndicatorMetadataOut(
+        indicator_code="NY.GDP.PCAP.CD", indicator_name="GDP per capita (current US$)", source="wb"
+    )
+
+    async def fake_resolve(_session, token):
+        return rankings.IndicatorResolution(
+            token=token, candidates=[growth, per_capita], note="EconRadar holds no GDP level."
+        )
+
+    monkeypatch.setattr(tools_module, "resolve_indicator_request", fake_resolve)
+    result = await tools_module.run_rank_countries(None, {"indicator": "gdp"})
+
+    assert result.ok is False
+    assert [o["indicator_code"] for o in result.payload["options"]] == [
+        "NY.GDP.MKTP.KD.ZG",
+        "NY.GDP.PCAP.CD",
+    ]
+    assert "ambiguous" in result.payload["error"]
+    assert "Do not choose by guessing" in result.payload["error"]
+    assert "GDP growth (annual %)" in result.reader_message
 
 
 def test_citations_come_from_tool_results_not_similarity():

@@ -24,6 +24,8 @@ so outright. A caller asking for the top five is told it is seeing five of 194.
 from __future__ import annotations
 
 import datetime as dt
+import re
+from dataclasses import dataclass, field
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,6 +39,188 @@ logger = get_logger(__name__)
 #: A ranking never exceeds one row per country, so this bounds a response by the
 #: shape of the data rather than by an arbitrary page size.
 MAX_ENTRIES = 300
+
+
+# ── naming ───────────────────────────────────────────────────────────────────
+# The catalog's concepts are machine tokens — `government_debt`, `gdp_per_capita`.
+# People, and models writing tool arguments on their behalf, type "public debt"
+# and "gdp". Measured before this existed: of 29 phrasings a reader would
+# plausibly use, **26 resolved to nothing**, including "government debt" — the
+# concept's own name with a space instead of an underscore. Every one of those was
+# a question the database could answer, answered with "EconRadar does not track
+# anything matching that".
+#
+# Two rules, and the second is the more important one.
+
+
+def _normalise(token: str) -> str:
+    """`Debt-to-GDP ratio` and `debt to gdp ratio` are the same request."""
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", (token or "").lower())).strip("_")
+
+
+#: Suffixes that name the *kind* of number rather than the subject, and so never
+#: distinguish two things this catalog holds. Stripped only after a direct match
+#: has already failed, so `exchange_rate` and `policy_rate` — concepts that end in
+#: one of these words — are never mangled.
+_TRAILING_QUALIFIERS: frozenset[str] = frozenset(
+    {
+        "rate",
+        "rates",
+        "ratio",
+        "level",
+        "levels",
+        "index",
+        "data",
+        "figures",
+        "statistics",
+        "stats",
+        "numbers",
+        "percentage",
+        "percent",
+        "value",
+        "values",
+    }
+)
+
+#: Phrasings that mean exactly one concept.
+CONCEPT_ALIASES: dict[str, str] = {
+    # growth
+    "economic_growth": "gdp_growth",
+    "growth": "gdp_growth",
+    "output_growth": "gdp_growth",
+    "real_gdp_growth": "gdp_growth",
+    "gdp_growth_rate": "gdp_growth",
+    # income
+    "gdp_per_head": "gdp_per_capita",
+    "per_capita_gdp": "gdp_per_capita",
+    "per_capita_income": "gdp_per_capita",
+    "income_per_person": "gdp_per_capita",
+    "income_per_capita": "gdp_per_capita",
+    "average_income": "gdp_per_capita",
+    "living_standards": "gdp_per_capita",
+    # debt — this catalog holds no other kind, so "debt" is not ambiguous
+    "debt": "government_debt",
+    "public_debt": "government_debt",
+    "national_debt": "government_debt",
+    "sovereign_debt": "government_debt",
+    "gross_debt": "government_debt",
+    "debt_to_gdp": "government_debt",
+    "debt_burden": "government_debt",
+    "government_borrowing": "government_debt",
+    # labour
+    "jobless": "unemployment",
+    "joblessness": "unemployment",
+    "unemployed": "unemployment",
+    "out_of_work": "unemployment",
+    # prices
+    "consumer_price_inflation": "inflation",
+    "cpi_inflation": "inflation",
+    "price_inflation": "inflation",
+    "cost_of_living": "inflation",
+    "consumer_price_index": "price_level",
+    "consumer_prices": "price_level",
+    "price_index": "price_level",
+    "cpi_index": "price_level",
+    # money
+    "central_bank_rate": "policy_rate",
+    "policy_interest_rate": "policy_rate",
+    "monetary_policy_rate": "policy_rate",
+    "benchmark_rate": "policy_rate",
+    "base_rate": "policy_rate",
+    "bank_rate": "policy_rate",
+    "official_rate": "policy_rate",
+    "government_bond_yield": "bond_yield",
+    "bond_yields": "bond_yield",
+    "sovereign_yield": "bond_yield",
+    "long_term_interest_rate": "bond_yield",
+    "ten_year_yield": "bond_yield",
+    "10_year_yield": "bond_yield",
+    "yield": "bond_yield",
+    "fx": "exchange_rate",
+    "fx_rate": "exchange_rate",
+    "currency": "exchange_rate",
+    "currency_rate": "exchange_rate",
+    "dollar_exchange_rate": "exchange_rate",
+    "usd_exchange_rate": "exchange_rate",
+    # external
+    "current_account_balance": "current_account",
+    "external_balance": "current_account",
+    "balance_of_payments": "current_account",
+    "export": "exports",
+    "import": "imports",
+    # markets and industry
+    "stock_market": "equity_market",
+    "stock_market_index": "equity_market",
+    "stock_prices": "equity_market",
+    "share_prices": "equity_market",
+    "equity_prices": "equity_market",
+    "equities": "equity_market",
+    "manufacturing_output": "industrial_production",
+    "industrial_output": "industrial_production",
+    "factory_output": "industrial_production",
+}
+
+#: Phrasings that mean more than one of the things this catalog holds. These are
+#: **not** resolved to a best guess, and that is the point. Silently answering
+#: "what is Japan's GDP?" with GDP *growth* is the metric-confusion failure the
+#: whole indicator-metadata layer exists to prevent — it would be a real figure,
+#: correctly sourced, and not the number the reader asked for. The caller is given
+#: the candidates and asks again.
+AMBIGUOUS_ALIASES: dict[str, tuple[str, ...]] = {
+    "gdp": ("gdp_growth", "gdp_per_capita"),
+    "gross_domestic_product": ("gdp_growth", "gdp_per_capita"),
+    "economic_output": ("gdp_growth", "gdp_per_capita"),
+    "economy_size": ("gdp_growth", "gdp_per_capita"),
+    # "CPI" is the index; "CPI" is also what most people call CPI inflation. The
+    # two differ by a whole transformation, so guessing is exactly wrong.
+    "cpi": ("inflation", "price_level"),
+    "prices": ("inflation", "price_level"),
+    "price": ("inflation", "price_level"),
+    # A policy rate and a 10-year yield are both "the interest rate".
+    "interest_rate": ("policy_rate", "bond_yield"),
+    "interest_rates": ("policy_rate", "bond_yield"),
+    "borrowing_costs": ("policy_rate", "bond_yield"),
+    # No net-trade series exists; exports and imports are separate, and the
+    # current account is the closest single balance.
+    "trade": ("exports", "imports", "current_account"),
+    "trade_balance": ("exports", "imports", "current_account"),
+}
+
+#: Said out loud when a request names something the catalog cannot supply at all,
+#: as opposed to something it names differently.
+NOT_HELD: dict[str, str] = {
+    "gdp": (
+        "EconRadar holds no GDP *level* series — no total output in dollars. It "
+        "holds GDP growth and GDP per capita."
+    ),
+    "gross_domestic_product": (
+        "EconRadar holds no GDP *level* series — no total output in dollars. It "
+        "holds GDP growth and GDP per capita."
+    ),
+    "trade_balance": (
+        "EconRadar holds no net trade balance. It holds exports and imports "
+        "separately, both as a share of GDP, and the current account balance."
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
+class IndicatorResolution:
+    """What a caller's indicator token turned out to mean.
+
+    Three outcomes, and they are genuinely different: one series, several plausible
+    series, or nothing. Collapsing the middle case into either of the others is how
+    a request for "GDP" becomes an answer about growth.
+    """
+
+    token: str
+    match: IndicatorMetadataOut | None = None
+    candidates: list[IndicatorMetadataOut] = field(default_factory=list)
+    note: str | None = None
+
+    @property
+    def ambiguous(self) -> bool:
+        return self.match is None and bool(self.candidates)
 
 
 async def list_indicator_metadata(
@@ -115,35 +299,89 @@ async def list_indicator_metadata(
     return out
 
 
-async def resolve_indicator(session: AsyncSession, token: str) -> IndicatorMetadataOut | None:
-    """Find an indicator from a code or from a concept name.
+async def resolve_indicator_request(session: AsyncSession, token: str) -> IndicatorResolution:
+    """Turn whatever a caller typed into a series, a choice of series, or nothing.
 
     Accepting a concept is not a convenience. A caller that has to guess an exact
     code guesses wrong, and the wrong guess here is not a 404 — it is a plausible
     ranking on the wrong measurement. Given "government_debt" this returns the
     series marked primary for that concept, which is a decision recorded in the
     database with its reasoning, rather than one improvised at question time.
+
+    The order below is deliberate. An explicit code always wins, so a caller who
+    knows exactly what it wants is never second-guessed. Concepts and aliases come
+    next, and the trailing-qualifier strip comes last of all — running it earlier
+    would turn `exchange_rate` into `exchange` and `policy_rate` into `policy`.
     """
-    token = (token or "").strip()
-    if not token:
-        return None
+    raw = (token or "").strip()
+    if not raw:
+        return IndicatorResolution(token=raw)
 
-    exact = await list_indicator_metadata(session, indicator_code=token)
+    exact = await list_indicator_metadata(session, indicator_code=raw)
     if exact:
-        return exact[0]
+        return IndicatorResolution(token=raw, match=exact[0])
 
-    by_concept = await list_indicator_metadata(session, concept=token.replace("-", "_"))
-    if by_concept:
-        # list_indicator_metadata sorts primary first.
-        return by_concept[0]
+    normalised = _normalise(raw)
+    if not normalised:
+        return IndicatorResolution(token=raw)
+
+    for candidate in (normalised, _strip_qualifier(normalised)):
+        if not candidate:
+            continue
+        resolution = await _resolve_normalised(session, raw, candidate)
+        if resolution is not None:
+            return resolution
 
     # Case-insensitive code match, last: codes are conventionally upper case, and
     # falling back to it before the concept lookup would shadow a concept name.
-    folded = token.casefold()
+    folded = raw.casefold()
     for meta in await list_indicator_metadata(session):
         if meta.indicator_code.casefold() == folded:
-            return meta
+            return IndicatorResolution(token=raw, match=meta)
+    return IndicatorResolution(token=raw, note=NOT_HELD.get(normalised))
+
+
+def _strip_qualifier(normalised: str) -> str:
+    """`unemployment_rate` -> `unemployment`. One suffix, not repeatedly."""
+    head, _, tail = normalised.rpartition("_")
+    return head if head and tail in _TRAILING_QUALIFIERS else ""
+
+
+async def _resolve_normalised(
+    session: AsyncSession, raw: str, candidate: str
+) -> IndicatorResolution | None:
+    """One lookup pass over concepts and aliases. None means "keep looking"."""
+    by_concept = await list_indicator_metadata(session, concept=candidate)
+    if by_concept:
+        # list_indicator_metadata sorts primary first.
+        return IndicatorResolution(token=raw, match=by_concept[0])
+
+    if (aliased := CONCEPT_ALIASES.get(candidate)) is not None:
+        by_alias = await list_indicator_metadata(session, concept=aliased)
+        if by_alias:
+            logger.info("indicator alias: %r -> concept %r", raw, aliased)
+            return IndicatorResolution(token=raw, match=by_alias[0])
+
+    if (options := AMBIGUOUS_ALIASES.get(candidate)) is not None:
+        found: list[IndicatorMetadataOut] = []
+        for concept in options:
+            primaries = await list_indicator_metadata(session, concept=concept)
+            if primaries:
+                found.append(primaries[0])
+        if found:
+            logger.info("indicator ambiguous: %r -> %s", raw, [m.indicator_code for m in found])
+            return IndicatorResolution(token=raw, candidates=found, note=NOT_HELD.get(candidate))
     return None
+
+
+async def resolve_indicator(session: AsyncSession, token: str) -> IndicatorMetadataOut | None:
+    """The one unambiguous series a token names, or None.
+
+    An ambiguous token returns None here — `rank_countries` must not pick between
+    GDP growth and GDP per capita on a caller's behalf. Callers that can ask again
+    use `resolve_indicator_request` and read `.candidates`.
+    """
+    return (await resolve_indicator_request(session, token)).match
 
 
 async def rank_countries(

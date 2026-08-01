@@ -69,7 +69,11 @@ TASK_RAG_ANSWER = "rag_answer"
 #:     retrieval over chunks, so every cached answer was produced by a prompt and a
 #:     pipeline that no longer exist. Also carries the agent prompt's rule against
 #:     inventing a "projection" qualifier the comparability notes do not state.
-PROMPT_REVISION = 3
+#: 4 — decisions #41-#42: the verifier now accepts arithmetic a reader can check in
+#:     the sentence it appears in, and the prompt distinguishes "EconRadar does not
+#:     hold this" from "this does not exist". Both change what a correct answer looks
+#:     like, so answers written under revision 3 should not be served again.
+PROMPT_REVISION = 4
 
 
 def ttl_for(task_type: str) -> dt.timedelta:
