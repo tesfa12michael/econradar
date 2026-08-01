@@ -73,7 +73,10 @@ TASK_RAG_ANSWER = "rag_answer"
 #:     the sentence it appears in, and the prompt distinguishes "EconRadar does not
 #:     hold this" from "this does not exist". Both change what a correct answer looks
 #:     like, so answers written under revision 3 should not be served again.
-PROMPT_REVISION = 4
+#: 5 — the agent prompt now forbids Markdown. The chat panel renders answers as
+#:     plain text (`whitespace-pre-line`), so cached answers containing `**bold**`
+#:     display their asterisks; every one of them has to be retired to fix it.
+PROMPT_REVISION = 5
 
 
 def ttl_for(task_type: str) -> dt.timedelta:
