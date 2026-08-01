@@ -275,11 +275,29 @@ async def test_a_broken_provider_falls_through_like_a_rate_limited_one(monkeypat
 # ── prompts ──────────────────────────────────────────────────────────────────
 
 
-def test_the_narration_prompt_renders_every_supplied_number():
+ANOMALY_PROMPT_CONTEXT = {
+    "country": "Nigeria",
+    "indicator": "Inflation, consumer prices (annual %)",
+    "unit": "%",
+    "unit_suffix": "%",
+    "source": "world_bank",
+    "anomaly": {"date": "1995-01-01", "value": 72.84, "z_score": 3.4, "deviation_type": "spike"},
+    "window": [
+        {"date": "1994-01-01", "value": 57.03},
+        {"date": "1995-01-01", "value": 72.84},
+        {"date": "1996-01-01", "value": 29.27},
+    ],
+    "other_anomalies": [{"date": "2024-01-01", "value": 33.2, "deviation_type": "spike"}],
+}
+
+
+def test_a_prompt_renders_every_supplied_number():
     from services import prompts
 
-    rendered = prompts.render("narration.j2", min_words=90, max_words=150, forecast=None, **CONTEXT)
-    for figure in ("33.2", "24.66", "72.84", "+8.54", "5.38"):
+    rendered = prompts.render(
+        "anomaly_explanation.j2", min_words=40, max_words=90, **ANOMALY_PROMPT_CONTEXT
+    )
+    for figure in ("72.84", "57.03", "29.27", "3.4", "33.2"):
         assert figure in rendered
     assert "Nigeria" in rendered
 
@@ -291,7 +309,7 @@ def test_a_prompt_missing_a_context_key_fails_loudly():
     from services import prompts
 
     with pytest.raises(UndefinedError):
-        prompts.render("narration.j2", min_words=90, max_words=150)
+        prompts.render("anomaly_explanation.j2", min_words=40, max_words=90)
 
 
 def test_the_system_prompt_states_the_groundedness_rule():

@@ -49,7 +49,8 @@ from models import ForecastCache, LlmCache
 logger = get_logger(__name__)
 
 # task_type values, matching the llm_cache column comment in 0002_schema.sql.
-TASK_NARRATION = "narration"
+# `narration` was one of these until the panel was removed; rows written under it
+# are simply never read again, and no code path can produce another.
 TASK_ANOMALY_EXPLANATION = "anomaly_explanation"
 TASK_VLM_INTERPRETATION = "vlm_interpretation"
 TASK_RAG_ANSWER = "rag_answer"
@@ -91,8 +92,8 @@ def _slug(value: Any) -> str:
 def build_cache_key(task_type: str, /, **parts: Any) -> str:
     """Readable prefix + unambiguous digest of every component.
 
-    >>> build_cache_key("narration", country="NGA", indicator="FP.CPI.TOTL.ZG", model="mistral")
-    'narration:NGA:FP.CPI.TOTL.ZG:...'
+    >>> build_cache_key("forecast", country="NGA", indicator="FP.CPI.TOTL.ZG", model="chronos2")
+    'forecast:NGA:FP.CPI.TOTL.ZG:...'
     """
     canonical = json.dumps(
         {"task": task_type, "rev": PROMPT_REVISION, **{k: parts[k] for k in sorted(parts)}},

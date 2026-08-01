@@ -164,25 +164,13 @@ class ForecastOut(BaseModel):
     generated_at: dt.datetime | None = None
 
 
-class NarrationOut(BaseModel):
-    """Grounded commentary on one series (feature 1.5).
+class ChartInterpretationOut(BaseModel):
+    """A vision model's reading of the rendered chart (feature 2.1).
 
     `groundedness_score` describes *this text*: it is the verifier's verdict on the
     string being returned, recorded when the text was generated and carried through
-    the cache with it. A cached narration therefore never arrives unverified.
+    the cache with it. A cached reading therefore never arrives unverified.
     """
-
-    country_code: str
-    indicator_code: str
-    text: str
-    provider: str
-    model: str
-    groundedness_score: float | None = None
-    cached: bool = False
-
-
-class ChartInterpretationOut(BaseModel):
-    """A vision model's reading of the rendered chart (feature 2.1)."""
 
     country_code: str
     indicator_code: str

@@ -118,7 +118,7 @@ export interface Forecast {
   generated_at: string | null;
 }
 
-export interface Narration {
+export interface ChartInterpretation {
   country_code: string;
   indicator_code: string;
   text: string;
@@ -128,8 +128,6 @@ export interface Narration {
   groundedness_score: number | null;
   cached: boolean;
 }
-
-export interface ChartInterpretation extends Narration {}
 
 export interface AnomalyExplanation {
   country_code: string;

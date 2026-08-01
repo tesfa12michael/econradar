@@ -151,8 +151,8 @@ export default async function Home({ searchParams }: PageProps) {
         className="border-t px-6 py-4 text-xs"
         style={{ borderColor: 'var(--border)', color: 'var(--text-tertiary)' }}
       >
-        Data: World Bank · IMF · FRED · BIS · WB DataBank. Forecasting, LLM narration and
-        RAG Q&amp;A arrive in Phase 3.
+        Data: World Bank · IMF · FRED · BIS · WB DataBank. Zero-shot forecasting, AI chart
+        analysis and grounded Q&amp;A on every country page.
       </footer>
     </main>
   );

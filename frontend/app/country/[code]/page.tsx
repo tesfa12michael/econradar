@@ -1,11 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import {
-  AnomalyExplanationsPanel,
-  ChartAnalysisPanel,
-  NarrationPanel,
-} from '@/components/AiPanel';
+import { AnomalyExplanationsPanel, ChartAnalysisPanel } from '@/components/AiPanel';
 import { ForecastChart } from '@/components/ForecastChart';
 import { AnomalyBadge, Card, EmptyState, PanelHeading, SourceChip } from '@/components/ui';
 import {
@@ -129,9 +125,8 @@ export default async function CountryPage({ params, searchParams }: PageProps) {
           )}
         </Card>
 
-        {/* Each panel fetches independently, after the chart above has painted. */}
+        {/* Fetches independently, after the chart above has painted. */}
         <div className="flex flex-col gap-5">
-          <NarrationPanel key={`n-${selected}`} countryCode={iso3} indicator={selected} />
           <ChartAnalysisPanel key={`v-${selected}`} countryCode={iso3} indicator={selected} />
         </div>
       </div>

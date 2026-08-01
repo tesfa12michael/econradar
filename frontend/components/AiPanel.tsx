@@ -1,12 +1,12 @@
 'use client';
 
-/** Async AI panels for the country profile (features 1.5, 2.1, 2.3).
+/** Async AI panels for the country profile (features 2.1, 2.3).
  *
  * These are client components on purpose. The design system bans AI content from
  * blocking page load, so the historical chart is server-rendered and already on
  * screen before any of this mounts; each panel then fetches independently and
- * fills in. A slow narration cannot delay a VLM reading, and neither can delay
- * the chart.
+ * fills in. A slow chart reading cannot delay the anomaly explanations, and
+ * neither can delay the chart itself.
  *
  * Switching indicator aborts the in-flight request rather than racing it — the
  * acceptance criterion in features.md 1.7, and the reason every fetch here is
@@ -21,7 +21,6 @@ import {
   modelLabel,
   type AnomalyExplanation,
   type ChartInterpretation,
-  type Narration,
 } from '@/lib/api';
 
 import { AnomalyBadge, Card, PanelHeading, Skeleton } from './ui';
@@ -113,41 +112,6 @@ function GenerationChip({
 interface SeriesProps {
   countryCode: string;
   indicator: string;
-}
-
-export function NarrationPanel({ countryCode, indicator }: SeriesProps) {
-  const state = useAiResource<Narration>(
-    `narrate/${countryCode}?indicator=${encodeURIComponent(indicator)}`,
-  );
-
-  return (
-    <Card>
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
-        <PanelHeading>AI narration</PanelHeading>
-        {state.status === 'ready' && (
-          <GenerationChip
-            provider={state.data.provider}
-            score={state.data.groundedness_score}
-            cached={state.data.cached}
-          />
-        )}
-      </div>
-      <div aria-live="polite" aria-busy={state.status === 'loading'}>
-        {state.status === 'loading' && <ProseSkeleton />}
-        {state.status === 'empty' && (
-          <Unavailable reason="Narration is not available for this series right now. It is written only from the numbers on this page — when no provider returns a verifiable reading, nothing is shown rather than something unchecked." />
-        )}
-        {state.status === 'ready' && (
-          <p
-            style={{ color: 'var(--text-secondary)' }}
-            className="text-base leading-relaxed whitespace-pre-line"
-          >
-            {state.data.text}
-          </p>
-        )}
-      </div>
-    </Card>
-  );
 }
 
 export function ChartAnalysisPanel({ countryCode, indicator }: SeriesProps) {

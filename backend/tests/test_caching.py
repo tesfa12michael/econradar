@@ -1,9 +1,9 @@
 """Lazy, content-addressed caching and single-flight (decision #31).
 
-The waste these pin down was measured, not theorised. Narration and chart analysis
-each held two cache keys per series because the key changes when a forecast warms,
-and every panel re-generated on a TTL boundary even though the key — and therefore
-the inputs, and therefore the answer — had not changed at all.
+The waste these pin down was measured, not theorised. Chart analysis held two
+cache keys per series because the key changes when a forecast warms, and every
+panel re-generated on a TTL boundary even though the key — and therefore the
+inputs, and therefore the answer — had not changed at all.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ async def test_a_failure_is_not_cached_as_an_answer():
 
 
 async def test_borrowing_never_starts_work_of_its_own():
-    """The narration panel waits for a forecast that is already running and
+    """The chart-analysis panel waits for a forecast that is already running and
     otherwise proceeds without one — it must never trigger a cold GPU itself."""
     from services import singleflight
 
@@ -92,11 +92,13 @@ def test_the_cache_key_carries_the_prompt_revision():
     reaches text already generated."""
     from services import cache
 
-    before = cache.build_cache_key("narration", country="BRA", indicator="CBPOL")
+    before = cache.build_cache_key("vlm_interpretation", country="BRA", indicator="CBPOL")
     original = cache.PROMPT_REVISION
     try:
         cache.PROMPT_REVISION = original + 1
-        assert cache.build_cache_key("narration", country="BRA", indicator="CBPOL") != before
+        assert (
+            cache.build_cache_key("vlm_interpretation", country="BRA", indicator="CBPOL") != before
+        )
     finally:
         cache.PROMPT_REVISION = original
 
@@ -104,11 +106,11 @@ def test_the_cache_key_carries_the_prompt_revision():
 async def test_borrowing_waits_briefly_for_the_task_to_appear():
     """The race this closes was live, not hypothetical.
 
-    All four panels are fired together by the browser, so whether the forecast has
-    registered its task by the time narration looks is decided by a couple of
+    The panels are fired together by the browser, so whether the forecast has
+    registered its task by the time chart analysis looks is decided by a couple of
     database round trips. Checking once loses that race routinely — observed on a
-    cold country: the forecast computed, narration missed it and cached a version
-    with no forecast that the very next visitor would supersede.
+    cold country: the forecast computed, the borrower missed it and cached a
+    version with no forecast that the very next visitor would supersede.
     """
     from services import singleflight
 

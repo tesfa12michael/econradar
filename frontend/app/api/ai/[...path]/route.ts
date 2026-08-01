@@ -18,7 +18,6 @@ import { apiUrl } from '@/lib/api';
 
 const ALLOWED = new Set([
   'forecast',
-  'narrate',
   'vlm-interpret',
   'anomaly-explanations',
   'chat',
@@ -55,7 +54,7 @@ async function forward(request: NextRequest, segments: string[], body?: string) 
       headers: { 'content-type': 'application/json' },
       body,
       // AI responses are cached in Supabase by the backend; caching them again at
-      // the edge would serve a narration whose groundedness verdict has expired.
+      // the edge would serve text whose groundedness verdict has expired.
       cache: 'no-store',
     });
 

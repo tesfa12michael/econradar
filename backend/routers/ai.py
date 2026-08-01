@@ -1,4 +1,4 @@
-"""Intelligence-layer API — forecasting, narration, VLM interpretation, RAG Q&A.
+"""Intelligence-layer API — forecasting, VLM interpretation, RAG Q&A.
 
 Grouped away from `data.py` because these routes share a property the data routes
 do not: **every one of them can legitimately have nothing to return.** A model may
@@ -28,12 +28,10 @@ from schemas import (
     ChatResponse,
     ForecastOut,
     ForecastPointOut,
-    NarrationOut,
 )
 from services.anomaly_explain import explain_anomalies
 from services.chat import answer_chat, stream_chat
 from services.forecast_store import get_forecast
-from services.narration import narrate_series
 from services.vlm_interpret import interpret_chart
 
 router = APIRouter(tags=["ai"])
@@ -89,37 +87,6 @@ async def get_series_forecast(
         ],
         cached=forecast.cached,
         generated_at=forecast.generated_at,
-    )
-
-
-@router.get("/narrate/{country_code}", response_model=NarrationOut)
-async def get_narration(
-    country_code: str,
-    indicator: str = Query(description="Indicator code to narrate"),
-    session: AsyncSession = Depends(get_session),
-) -> NarrationOut:
-    """Grounded commentary on one series (feature 1.5).
-
-    Every number in the response appeared in the context the model was given;
-    `groundedness_score` is the verifier's verdict on the text being returned, not a
-    generic claim about the system.
-    """
-    iso3 = _iso3(country_code)
-    narration = await narrate_series(session, iso3, indicator.strip())
-    if narration is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No narration available for {iso3} / {indicator!r}. The series may "
-            "be absent, or no provider returned a grounded response.",
-        )
-    return NarrationOut(
-        country_code=narration.country_code,
-        indicator_code=narration.indicator_code,
-        text=narration.text,
-        provider=narration.provider,
-        model=narration.model,
-        groundedness_score=narration.groundedness_score,
-        cached=narration.cached,
     )
 
 
