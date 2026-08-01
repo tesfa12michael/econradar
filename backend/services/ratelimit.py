@@ -156,12 +156,20 @@ class ChatRateLimiter:
             logger.info("rate limiter evicted the oldest tracked client (%s)", evicted)
 
     def snapshot(self) -> dict[str, int]:
-        """Counters for `/status`. Cheap, and the only view anyone has of this."""
+        """Counters for `/status`. Cheap, and the only view anyone has of this.
+
+        `chat_requests_today` is deliberately not called "answers": the limiter runs
+        as a route dependency, before the body is validated, so a request that is
+        allowed through and then rejected as malformed still counted. That is the
+        right behaviour — a client spamming bad JSON is still traffic — but it means
+        this number is *requests admitted*, and reading it as answers given would
+        overstate what the quota was spent on.
+        """
         today = dt.datetime.now(dt.UTC).date()
         used = self._global.day_count if self._global.day == today else 0
         return {
             "tracked_clients": len(self._clients),
-            "answers_today": used,
+            "chat_requests_today": used,
             "daily_budget": settings.chat_global_limit_per_day,
             "daily_remaining": max(0, settings.chat_global_limit_per_day - used),
         }

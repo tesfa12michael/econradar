@@ -316,7 +316,13 @@ def test_status_exposes_the_counters_without_exposing_a_caller(
 
     body = client.get("/status").json()
     assert "chat" in body
-    assert set(body["chat"]) >= {"requests", "outcomes", "daily_remaining", "tracked_clients"}
+    assert set(body["chat"]) >= {
+        "requests",
+        "outcomes",
+        "daily_remaining",
+        "tracked_clients",
+        "chat_requests_today",
+    }
     serialised = str(body["chat"])
     assert "203.0.113" not in serialised and "question" not in serialised
 
