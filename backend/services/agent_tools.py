@@ -416,6 +416,29 @@ async def run_rank_countries(session: AsyncSession, args: dict[str, Any]) -> Too
     result = await rank_countries(
         session, indicator_token, order=order, limit=limit, max_age_years=max_age
     )
+
+    # A recency filter that excludes *everything* is a filter that was too tight,
+    # not an absence of data — and reporting it as "no ranking is available" is
+    # false. Found in a browser, not by curl: asked for the "current" highest
+    # unemployment rates, the model chose max_age_years=1, and the World Bank's
+    # annual series is dated 2025-01-01, so a one-year window swept away all 187
+    # countries. The filter is dropped, the ranking is returned, and the payload
+    # says the window was widened so the answer can say so too.
+    dropped_filter: dict[str, Any] | None = None
+    if max_age is not None and (result is None or not result.entries):
+        unfiltered = await rank_countries(session, indicator_token, order=order, limit=limit)
+        if unfiltered is not None and unfiltered.entries:
+            dropped_filter = {
+                "requested_max_age_years": max_age,
+                "reason": (
+                    "No country has an observation that recent. This series is not "
+                    "updated that often; the ranking below uses each country's most "
+                    "recent reading instead, and every entry carries its own date."
+                ),
+                "most_recent_observation_anywhere": str(unfiltered.latest_observation),
+            }
+            result = unfiltered
+
     if result is None or not result.entries:
         available = await list_indicator_metadata(session)
         return ToolResult(
@@ -445,6 +468,7 @@ async def run_rank_countries(session: AsyncSession, args: dict[str, Any]) -> Too
                 "earliest": str(result.earliest_observation),
                 "latest": str(result.latest_observation),
             },
+            **({"recency_filter_dropped": dropped_filter} if dropped_filter else {}),
             "rankings": [
                 {
                     "rank": e.rank,

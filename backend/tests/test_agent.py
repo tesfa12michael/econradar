@@ -460,6 +460,59 @@ async def test_the_collected_form_withholds_an_unverified_answer(monkeypatch, st
     assert result["tools"][0]["name"] == QUERY_OBSERVATIONS
 
 
+async def test_a_recency_filter_that_excludes_everything_is_dropped(monkeypatch):
+    """Too tight a window is not an absence of data, and saying so is false.
+
+    Caught in a browser rather than by curl. Asked for the "current" highest
+    unemployment rates, the model chose max_age_years=1; the World Bank's annual
+    series is dated 2025-01-01, so a one-year window swept away all 187 countries
+    and the tool reported "No ranking is available for 'unemployment'" — which a
+    reader would take to mean the data does not exist.
+    """
+    import datetime as dt
+
+    from schemas import IndicatorMetadataOut, RankingEntryOut, RankingOut
+    from services import agent_tools as tools_module
+
+    meta = IndicatorMetadataOut(
+        indicator_code="SL.UEM.TOTL.ZS", indicator_name="Unemployment", source="world_bank"
+    )
+    full = RankingOut(
+        indicator=meta,
+        order="desc",
+        country_count=187,
+        truncated=False,
+        earliest_observation=dt.date(2022, 1, 1),
+        latest_observation=dt.date(2025, 1, 1),
+        entries=[
+            RankingEntryOut(
+                rank=1,
+                country_code="SWZ",
+                value=34.2,
+                observation_date=dt.date(2025, 1, 1),
+                source="world_bank",
+            )
+        ],
+    )
+
+    async def fake_rank(_session, _token, *, order="desc", limit=None, max_age_years=None):
+        # The window excludes everything; without it there are 187 countries.
+        return None if max_age_years is not None else full
+
+    monkeypatch.setattr(tools_module, "rank_countries", fake_rank)
+    result = await tools_module.run_rank_countries(
+        None, {"indicator": "unemployment", "max_age_years": 1}
+    )
+
+    assert result.ok is True
+    assert result.payload["country_count"] == 187
+    # And the widening is reported, so the answer can say the readings are older.
+    assert result.payload["recency_filter_dropped"]["requested_max_age_years"] == 1
+    assert (
+        result.payload["recency_filter_dropped"]["most_recent_observation_anywhere"] == "2025-01-01"
+    )
+
+
 def test_citations_come_from_tool_results_not_similarity():
     citations = chat_module.citations_for([_observation_result()])
     assert len(citations) == 1

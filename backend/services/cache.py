@@ -65,7 +65,11 @@ TASK_RAG_ANSWER = "rag_answer"
 #: 1 — Phase 3 as shipped.
 #: 2 — decisions #32-#34: anomalies carry their transition, direction words are
 #:     verified against the evidence, extreme values must be qualified.
-PROMPT_REVISION = 2
+#: 3 — decision #38: the chat path is an agent over tool results rather than
+#:     retrieval over chunks, so every cached answer was produced by a prompt and a
+#:     pipeline that no longer exist. Also carries the agent prompt's rule against
+#:     inventing a "projection" qualifier the comparability notes do not state.
+PROMPT_REVISION = 3
 
 
 def ttl_for(task_type: str) -> dt.timedelta:
