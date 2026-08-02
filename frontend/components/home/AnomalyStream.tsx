@@ -16,7 +16,7 @@
 
 import { RevealGroup, RevealItem } from '@/components/motion/Reveal';
 import { AnomalyBadge, Empty, Meta, SectionHead } from '@/components/primitives';
-import { formatValue, type AnomalyRecord } from '@/lib/api';
+import { formatValue, indicatorTitle, type AnomalyRecord } from '@/lib/api';
 
 export function AnomalyStream({
   anomalies,
@@ -87,7 +87,7 @@ function FlaggedRow({ anomaly, index }: { anomaly: AnomalyRecord; index: number 
         </span>
         <span className="mt-0.5 block truncate">
           <Meta>
-            {anomaly.indicator_name ?? anomaly.indicator_code} · {anomaly.date.slice(0, 7)}
+            {indicatorTitle(anomaly.indicator_name) || anomaly.indicator_code} · {anomaly.date.slice(0, 7)}
           </Meta>
         </span>
       </span>

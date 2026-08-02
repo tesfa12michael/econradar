@@ -252,6 +252,19 @@ export function basisSummary(meta: Partial<IndicatorMetadata>): string[] {
     .filter((value): value is string => Boolean(value));
 }
 
+/** Tidy a provider's series name for display.
+ *
+ * Two of the stored names end in stray commas — "CPI Price, % y-o-y, not seas.
+ * adj.,," and "Exchange rate, new LCU per USD extended backward, period
+ * average,," — because that is how the provider publishes them. The name is
+ * left alone in the database, where it has to match the source; the trailing
+ * punctuation is dropped on the way to the screen, where it just reads as a
+ * typo. */
+export function indicatorTitle(name: string | null | undefined): string {
+  if (!name) return '';
+  return name.replace(/[\s,;·-]+$/, '');
+}
+
 /** Year from an ISO date, for coverage ranges. */
 export function yearOf(date: string | null | undefined): string {
   return date ? date.slice(0, 4) : '—';

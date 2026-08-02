@@ -31,6 +31,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   basisSummary,
   conceptLabel,
+  indicatorTitle,
   sourceLabel,
   yearOf,
   type IndicatorMetadata,
@@ -103,10 +104,10 @@ export function IndicatorInstrument({ catalogue, selected, selectedName }: Props
           <span
             className={cn(
               'block font-medium leading-[1.08] tracking-[-0.025em] text-ink',
-              displaySize(selectedName ?? current?.indicator_name ?? selected),
+              displaySize(indicatorTitle(selectedName ?? current?.indicator_name) || selected),
             )}
           >
-            {selectedName ?? current?.indicator_name ?? selected}
+            {indicatorTitle(selectedName ?? current?.indicator_name) || selected}
           </span>
 
           {/* Coverage on one line, measurement basis on the next. Run together
@@ -213,7 +214,7 @@ function SeriesRow({
       />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
-          <span className="truncate text-[13px] text-ink">{meta.indicator_name}</span>
+          <span className="truncate text-[13px] text-ink">{indicatorTitle(meta.indicator_name)}</span>
           {meta.is_primary_for_concept && (
             <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-signal-dim">
               primary
