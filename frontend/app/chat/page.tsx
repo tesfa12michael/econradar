@@ -1,33 +1,44 @@
-import Link from 'next/link';
-
 import { ChatPanel } from '@/components/ChatPanel';
+import { TopBar } from '@/components/home/TopBar';
+import {
+  fetchJson,
+  type AnomalyRecord,
+  type SystemStatus,
+} from '@/lib/api';
+
+export const revalidate = 300;
 
 export const metadata = {
-  title: 'Ask the data — EconRadar',
+  title: 'Ask the data',
   description:
-    'Ask questions about official macroeconomic data. Every figure is retrieved, cited and verified.',
+    'Ask questions about official macroeconomic data. The agent queries the database for every figure, cites the rows it read, and withholds any answer whose numbers do not check out.',
 };
 
-export default function ChatPage() {
-  return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-6 py-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <Link
-            href="/"
-            className="rounded-sm text-sm underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2"
-            style={{ color: 'var(--accent)', outlineColor: 'var(--accent)' }}
-          >
-            ← Map
-          </Link>
-          <h1 className="text-2xl font-semibold tracking-tight">Ask the data</h1>
-        </div>
-        <p className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
-          World Bank · IMF · FRED · BIS · WB DataBank
-        </p>
-      </header>
+export default async function ChatPage() {
+  const [status, anomalies] = await Promise.all([
+    fetchJson<SystemStatus>('/status'),
+    fetchJson<AnomalyRecord[]>('/api/v1/anomalies?limit=40'),
+  ]);
 
-      <ChatPanel />
-    </main>
+  /* One reading per series, same rule as the homepage feed: a month of policy
+   * decisions flags a dozen countries at once, and three prompts about the same
+   * central bank is one prompt repeated. */
+  const seen = new Set<string>();
+  const flagged: AnomalyRecord[] = [];
+  for (const anomaly of anomalies ?? []) {
+    const key = `${anomaly.country_code}:${anomaly.indicator_code}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    flagged.push(anomaly);
+    if (flagged.length === 4) break;
+  }
+
+  return (
+    <>
+      <TopBar status={status?.status ?? null} current="chat" />
+      <main id="main">
+        <ChatPanel status={status} flagged={flagged} />
+      </main>
+    </>
   );
 }

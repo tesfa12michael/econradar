@@ -10,7 +10,15 @@ import { Meta } from '@/components/primitives';
  * The dot beside the wordmark reports the backend's actual `/status` value. It
  * is the one status indicator in the product and it is wired to something real;
  * a decorative light that is always green is worse than no light at all. */
-export function TopBar({ status }: { status: string | null }) {
+export function TopBar({
+  status,
+  current,
+}: {
+  status: string | null;
+  /** The route this bar is rendered on, so the nav does not offer a link to the
+   * page the reader is already on. */
+  current?: 'chat' | 'status';
+}) {
   const operational = status === 'operational';
 
   return (
@@ -34,25 +42,41 @@ export function TopBar({ status }: { status: string | null }) {
         </Link>
 
         <nav className="flex items-center gap-1" aria-label="Primary">
-          <Link
-            href="/status"
-            className="rounded-md px-3 py-1.5 text-[13px] text-ink-muted transition-colors duration-200 hover:bg-[color:var(--plane-2)] hover:text-ink"
-          >
-            Status
-          </Link>
-          <Magnetic strength={4}>
+          {current === 'status' ? (
+            <span aria-current="page" className="px-3 py-1.5 text-[13px] text-ink">
+              Status
+            </span>
+          ) : (
             <Link
-              href="/chat"
-              className="group flex items-center gap-1.5 rounded-md border border-[color:var(--edge-strong)] px-3.5 py-1.5 text-[13px] font-medium text-ink transition-colors duration-200 hover:border-[color:var(--signal)] hover:text-signal"
+              href="/status"
+              className="rounded-md px-3 py-1.5 text-[13px] text-ink-muted transition-colors duration-200 hover:bg-[color:var(--plane-2)] hover:text-ink"
+            >
+              Status
+            </Link>
+          )}
+
+          {current === 'chat' ? (
+            <span
+              aria-current="page"
+              className="rounded-md border border-[color:var(--hairline)] px-3.5 py-1.5 text-[13px] font-medium text-ink-muted"
             >
               Ask the data
-              <ArrowUpRight
-                aria-hidden
-                weight="bold"
-                className="size-3.5 text-ink-dim transition-colors duration-200 group-hover:text-signal"
-              />
-            </Link>
-          </Magnetic>
+            </span>
+          ) : (
+            <Magnetic strength={4}>
+              <Link
+                href="/chat"
+                className="group flex items-center gap-1.5 rounded-md border border-[color:var(--edge-strong)] px-3.5 py-1.5 text-[13px] font-medium text-ink transition-colors duration-200 hover:border-[color:var(--signal)] hover:text-signal"
+              >
+                Ask the data
+                <ArrowUpRight
+                  aria-hidden
+                  weight="bold"
+                  className="size-3.5 text-ink-dim transition-colors duration-200 group-hover:text-signal"
+                />
+              </Link>
+            </Magnetic>
+          )}
         </nav>
       </div>
     </header>
