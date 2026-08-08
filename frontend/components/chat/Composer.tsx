@@ -83,7 +83,9 @@ export function Composer({
             type="submit"
             disabled={busy || value.trim().length === 0}
             aria-label="Ask"
-            className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[color:var(--plane-3)] text-ink-dim transition-colors duration-200 enabled:hover:bg-[color:var(--signal)] enabled:hover:text-signal-ink disabled:opacity-45"
+            /* The press scales rather than moving: a button that shifts down by
+               a pixel drags the composer's baseline with it. */
+            className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[color:var(--plane-3)] text-ink-dim transition-[background-color,color,transform] duration-200 enabled:hover:bg-[color:var(--signal)] enabled:hover:text-signal-ink enabled:active:scale-95 disabled:opacity-45"
           >
             <ArrowUp aria-hidden weight="bold" className="size-4" />
           </button>

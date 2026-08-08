@@ -105,8 +105,13 @@ function Row({
     /* A leader rule between the name and the figure, the way a statistical
      * annex sets a table. Without it the eye has to cross 300px of nothing to
      * pair a country with its number, and the two read as separate columns
-     * rather than one row. */
-    <div className="grid grid-cols-[2rem_auto_minmax(1.5rem,1fr)_auto] items-center gap-x-3 py-[7px]">
+     * rather than one row.
+     *
+     * The rule brightens while the pointer is anywhere in the row, which is the
+     * same job the rule already does, done live. Deliberately only the rule: no
+     * background and no cursor change, because the row is not a target — the
+     * country name inside it is, and it has its own hover. */
+    <div className="group grid grid-cols-[2rem_auto_minmax(1.5rem,1fr)_auto] items-center gap-x-3 py-[7px]">
       <Meta className="text-right text-ink-muted">{entry.rank}</Meta>
       <CountryLink
         code={entry.country_code}
@@ -114,7 +119,10 @@ function Row({
         indicator={code}
         className="truncate text-[13px]"
       />
-      <span aria-hidden className="h-px bg-[color:var(--hairline)]" />
+      <span
+        aria-hidden
+        className="h-px bg-[color:var(--hairline)] transition-colors duration-300 group-hover:bg-[color:var(--edge-strong)]"
+      />
       <span className="flex items-baseline gap-2.5">
         <span data-numeric className="text-[13px] text-ink">
           {formatValue(entry.value, unit)}

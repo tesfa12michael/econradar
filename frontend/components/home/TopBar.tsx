@@ -66,7 +66,7 @@ export function TopBar({
             <Magnetic strength={4}>
               <Link
                 href="/chat"
-                className="group flex items-center gap-1.5 rounded-md border border-[color:var(--edge-strong)] px-3.5 py-1.5 text-[13px] font-medium text-ink transition-colors duration-200 hover:border-[color:var(--signal)] hover:text-signal"
+                className="group flex items-center gap-1.5 rounded-md border border-[color:var(--edge-strong)] px-3.5 py-1.5 text-[13px] font-medium text-ink transition-[border-color,color,transform] duration-200 hover:border-[color:var(--signal)] hover:text-signal active:scale-[0.97]"
               >
                 Ask the data
                 <ArrowUpRight
