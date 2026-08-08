@@ -275,6 +275,22 @@ p {
   }
 }
 
+/* A measure drawing itself along its own axis.
+ *
+ * Deliberately a CSS keyframe rather than a Motion `initial`. Motion writes the
+ * start of an animation into the server-rendered HTML, which is how a reveal ends
+ * up shipping content at `opacity: 0`; a keyframe has no such start state, so the
+ * element's natural rendering is the finished one and the animation is only ever an
+ * enhancement over it. The reduced-motion block below collapses it to its end. */
+@keyframes draw-x {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
 /* Skeletons breathe rather than blink. */
 @keyframes breathe {
   0%,
