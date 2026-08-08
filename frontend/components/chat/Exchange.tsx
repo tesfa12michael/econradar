@@ -259,50 +259,41 @@ function Sources({ citations, exchangeId }: { citations: Citation[]; exchangeId:
   );
 }
 
+/** One card, whether or not it links anywhere.
+ *
+ * These two states used to be written out separately, and they had drifted: a
+ * ranking citation announced "whole field" as a chip when it had no country to
+ * link to and as a suffix on the series line when it did. Same fact, same card,
+ * two renderings, decided by something unrelated to it. One body settles it —
+ * the only thing the link adds is the arrow that says it is one.
+ */
 function SourceCard({ citation }: { citation: Citation }) {
   const ranked = citation.chunk_type === 'rank_countries';
+  const href = citation.country_code
+    ? citation.indicator_code
+      ? `/country/${citation.country_code}?indicator=${encodeURIComponent(citation.indicator_code)}`
+      : `/country/${citation.country_code}`
+    : null;
+
+  const shell =
+    'block rounded-md border border-[color:var(--hairline)] bg-[color:var(--plane-2)] px-3 py-2.5 transition-colors duration-200';
+
   const body = (
     <>
       <span className="flex items-baseline justify-between gap-2">
         <span data-numeric className="text-[11px] text-signal">
           {citation.index}
         </span>
-        {ranked && <Meta className="text-[10px] uppercase tracking-[0.12em]">whole field</Meta>}
-      </span>
-      <span className="mt-1 block truncate text-[13px] text-ink">
-        {citation.country_name ?? citation.country_code ?? 'Reference'}
-      </span>
-      <span className="mt-0.5 block truncate">
-        <Meta>{indicatorTitle(citation.indicator_name) || citation.indicator_code || '—'}</Meta>
-      </span>
-    </>
-  );
-
-  const shell =
-    'block rounded-md border border-[color:var(--hairline)] bg-[color:var(--plane-2)] px-3 py-2.5 transition-colors duration-200';
-
-  if (!citation.country_code) {
-    return <span className={shell}>{body}</span>;
-  }
-
-  const href = citation.indicator_code
-    ? `/country/${citation.country_code}?indicator=${encodeURIComponent(citation.indicator_code)}`
-    : `/country/${citation.country_code}`;
-
-  return (
-    <Link href={href} className={`${shell} group hover:border-[color:var(--edge-strong)]`}>
-      <span className="flex items-baseline justify-between gap-2">
-        <span data-numeric className="text-[11px] text-signal">
-          {citation.index}
-        </span>
-        <ArrowUpRight
-          aria-hidden
-          weight="bold"
-          className="size-3 text-ink-dim transition-colors duration-200 group-hover:text-signal"
-        />
+        {href && (
+          <ArrowUpRight
+            aria-hidden
+            weight="bold"
+            className="size-3 text-ink-dim transition-colors duration-200 group-hover:text-signal"
+          />
+        )}
       </span>
       <span className="mt-1 block truncate text-[13px] text-ink transition-colors duration-200 group-hover:text-signal">
-        {citation.country_name ?? citation.country_code}
+        {citation.country_name ?? citation.country_code ?? 'Reference'}
       </span>
       <span className="mt-0.5 block truncate">
         <Meta>
@@ -310,6 +301,16 @@ function SourceCard({ citation }: { citation: Citation }) {
           {ranked && ' · whole field'}
         </Meta>
       </span>
+    </>
+  );
+
+  if (!href) {
+    return <span className={shell}>{body}</span>;
+  }
+
+  return (
+    <Link href={href} className={`${shell} group hover:border-[color:var(--edge-strong)]`}>
+      {body}
     </Link>
   );
 }
