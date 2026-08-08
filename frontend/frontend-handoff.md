@@ -8,7 +8,7 @@ it is shaped this way, what was deliberately left out, and the traps.
 
 ## 1. What this frontend is
 
-Three pages over a FastAPI backend that holds ~204,000 macroeconomic
+Four pages over a FastAPI backend that holds ~204,000 macroeconomic
 observations from five statistical agencies:
 
 | Route | What it is |
@@ -16,9 +16,7 @@ observations from five statistical agencies:
 | `/` | The world map, and everything the current indicator implies |
 | `/country/[code]` | One country, one series, in depth |
 | `/chat` | An agent that queries the database to answer questions |
-
-There is a fourth route the product expects and **does not have yet**: `/status`.
-It is linked from the topbar and the footer, and it currently 404s. See §9.
+| `/status` | What is held, when each connector last ran, what the agent has done |
 
 **The backend is not ours to change.** Every API is stable and documented in
 `docs/architecture.md` and `docs/features.md`. The redesign touched nothing
@@ -199,6 +197,17 @@ so the structural ornament is a map element rather than the square CSS grid
 painted behind every dark landing page. Keep the vignette light; a heavy one
 flattens the layers underneath back into the dead surface they exist to replace.
 
+**The backdrop responds to the pointer and not to scroll, and that is settled.**
+It was tried on 2026-08-08 and reverted, so here is the finding to save you the
+same afternoon. The atmosphere is `position: fixed`, and fixed elements are not
+scrolled by the root scroller, so a root scroll timeline on them is *inactive* by
+specification — a CSS `animation-timeline: scroll(root)` on those layers reports
+`timeline.currentTime === null` while an imperative `ScrollTimeline` on the same
+page reports 71%. Motion's `useScroll` produced no transform either. All three
+routes fail for the same structural reason. The remaining option is hand-rolled
+WAAPI, which is real machinery for ambient decoration, so the answer is no. If
+you genuinely want it, the atmosphere has to stop being `fixed` first.
+
 ### One product-specific rule
 
 **No figure ever counts up to its value.** The claim this product makes is that a
@@ -354,6 +363,41 @@ Two things the redesign fixed that are easy to regress:
   `"none"` and no citations. Do not print "every figure checked" over it — no
   check ran.
 
+### `/status` — what the system holds and how stale it is
+
+`app/status/page.tsx`, with `components/status/Freshness.tsx` and the pure,
+tested `lib/freshness.ts`. `revalidate = 60` rather than the site's 300, because
+freshness is this page's subject.
+
+**"Operational" is not the interesting question.** It describes the process. It
+says nothing about whether the five connectors behind the data have run this
+week, and those are different failure modes — a backend can answer every request
+perfectly while serving figures nobody has refreshed in a month. That is not
+hypothetical: it is exactly what happened between 5 and 8 August 2026, and
+nothing in the product showed it.
+
+So the centre of the page is the **freshness axis** — five connectors on one
+shared time axis, oldest run at the left, now at the right. Five separate
+timestamps make the reader do the comparison in their head; one axis makes a
+connector that has fallen days behind impossible to miss. Position is the only
+variable carrying meaning, restated as fill length, and every row also prints its
+own absolute timestamp and elapsed interval, so nothing is encoded by the picture
+alone.
+
+**Labels come from the backend's own words, not from what sounds good.** Two that
+matter: `chat_requests_today` is **traffic admitted, not answers given**, because
+the limiter runs as a route dependency ahead of body validation, so a malformed
+request spends the quota too (`services/ratelimit.py` says so in its docstring);
+and the telemetry counters are labelled **"since the last restart"** because
+`services/telemetry.py` keeps them in one process. Getting either wrong would
+overstate what the system did.
+
+**The unreachable state is the page's most important one.** When `/status` cannot
+be fetched, the page does not shrug — the reader asked whether the backend is up,
+and the answer, demonstrated rather than asserted, is that it could not be
+reached from here. It also refuses to guess *which side* is at fault, because
+that is the wrong kind of confidence for a status page.
+
 ---
 
 ## 8. Future surfaces: what was decided and why
@@ -388,15 +432,17 @@ measured column as the ranking rail and the feed.
 
 ## 9. Known gaps and tradeoffs
 
-**`/status` does not exist and is linked from two places.** `docs/designsystem.md`
-Flow 3 specifies a public status page; the backend already serves `GET /status`
-with pipeline health, per-source ingestion timestamps and agent telemetry, and
-`lib/api.ts` already has the `SystemStatus` type. The links in `TopBar` and
-`SiteFooter` currently 404. The owner deferred it knowingly. **This is the first
-thing to build.** `TopBar` already accepts `current="status"` for it.
+**A cached page cannot honestly report its own freshness.** Built into `/status`
+on 2026-08-08 and worth internalising before you add any page that reports "as
+of" anything. Next's **fetch Data Cache persists in `.next/cache` across
+builds**, so a build-time prerender can serve a payload of *any* age. The first
+render of `/status` proved it: source timestamps days older than the live API,
+stamped with the current render time. If a page states a read time, that time has
+to come from the read, not from the render — otherwise describe the cache window
+instead, which is what `/status` does now.
 
 **Bundle sizes.** `/` is 406 kB first load, `/country/[code]` 280 kB, `/chat`
-172 kB. deck.gl and Recharts dominate; Motion, Radix, cmdk and Phosphor added
+172 kB, `/status` 158 kB. deck.gl and Recharts dominate; Motion, Radix, cmdk and Phosphor added
 about 90 kB across the app. Nothing is lazy-loaded yet. If this needs to come
 down, the map is the candidate — it is the only route that needs deck.gl.
 
@@ -467,15 +513,18 @@ frontend/
     page.tsx              the map page (server)
     country/[code]/       the profile page (server)
     chat/                 the agent page (server shell)
+    status/               holdings, connector freshness, chat counters (server)
     api/ai/[...path]/     server-side proxy to the AI endpoints, explicit allowlist
   components/
-    ui/                   shadcn, vendored, ours to edit
+    ui/                   shadcn, vendored, ours to edit — command, popover,
+                          dialog, button. Only what is actually reached.
     primitives.tsx        Panel, SectionHead, Figure, Meta, SourceMark, AnomalyBadge…
     atmosphere/           PointerField (one listener), Atmosphere (background)
     motion/               Reveal, Spotlight, Magnetic
     home/                 TopBar, LiveTape, RankingRail, AnomalyStream, SiteFooter,
                           IndicatorInstrument
     chat/                 Opening, Composer, Exchange
+    status/               Freshness (the shared-axis connector plot)
     WorldMap.tsx          deck.gl choropleth
     SeriesChart.tsx       Recharts time series + forecast
     ForecastChart.tsx     async forecast fetch + the summary row
@@ -485,9 +534,17 @@ frontend/
     series.ts             summary stats, series ordering (tested)
     chartScale.ts         axis domain and tick formatting (tested)
     colorScale.ts         choropleth ramps (tested)
+    freshness.ts          elapsed labels and axis placement (tested)
     geo.ts                country anchors for the sweep and the markers
     motion.ts             durations, easings, variants
 ```
+
+A note on what is *not* here. `components/ui.tsx` and `IndicatorSelector.tsx`
+were the pre-redesign primitives and selector; they survived the redesign
+unreferenced, still styling themselves from tokens (`--bg-card`,
+`--text-primary`, `--warn`) that no longer exist. They and five unused shadcn
+primitives were deleted on 2026-08-08. If you find a stale import of any of them,
+the replacement is `primitives.tsx` or `home/IndicatorInstrument`.
 
 The proxy at `app/api/ai/[...path]/route.ts` deserves a note: it is an
 **explicit allowlist**, not a prefix check. A catch-all segment concatenated onto
